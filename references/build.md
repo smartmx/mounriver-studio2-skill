@@ -82,6 +82,27 @@ obj/<名>.bin`、`objdump -d -C -x <elf> > obj/<名>.lst`、`size <elf>`（Berke
 产物目录（先 clean 再切工具）。`show --json` 输出的 flags 是组装参考，但其对 CDT 语义的
 覆盖是精简版——复杂工程（FPU/特殊宏/多配置）以 MRS2/MRVC 产物为准。
 
+## 静态分析 / IntelliSense（让编辑器不报假红）
+
+MRS2 的实现（extension.js 源码级取证）：自带魔改 clangd（私有参数 `--enable-wch-ext`），
+单 LSP 实例 + **每工程缓存 CDB**（`%TEMP%\mrs-cache\<工程名>-<md5>\compile_commands.json`），
+切换工程上下文 = 杀进程重启换 `--compile-commands-dir`。**工程级 `-D` 宏隔离的唯一手段就是
+每工程一份 CDB + 切目录**——`--query-driver` 只补工具链内建宏/include，补不了工程宏。
+
+在 VSCode（MRS2 之外）复刻的正确架构：
+
+1. 从 `.cproject` 生成该工程的 `compile_commands.json`：每个源文件一条
+   `{directory: 工程根, command: 完整 gcc 命令行, file: 源文件路径}`，命令行按本文"直接编译配方"
+   组装（-I 用解析后的绝对路径，-D 原样保留字面引号）。汇编 .S 文件也收录
+   （`-x assembler-with-cpp`）。
+2. **clangd** 路线：工程根放 `.clangd` 指定 `CompileFlags: CompilationDatabase: <路径>`，
+   或启动参数 `--compile-commands-dir`；多工程 solution 各工程独立 CDB。
+3. **cpptools** 路线：`c_cpp_properties.json` 的 `compileCommands` 指向 CDB，`configuration`
+   按工程命名；一次只把"当前活动工程"的 CDB 放进配置即可（MRVC 同款语义：树选中工程 →
+   切换活动数据库）。
+4. 链接目录（linked folder）的源文件在 CDB 里按**物理路径**收录，否则编辑器从物理文件
+   反查不到条目（与编译换算规则一致，见 scan_sources 语义）。
+
 ## 静态栈/调用分析（MRS2 闭源功能的开源替代）
 
 编译时追加 `-fstack-usage`（每个 .c 旁生成 .su：函数栈用量）与

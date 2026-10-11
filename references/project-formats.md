@@ -61,10 +61,13 @@
 1. `.project` 的 `<name>`
 2. `.wvproj` 文件名
 3. `.launch`：`org.eclipse.cdt.launch.PROGRAM_NAME`（`obj\<新名>.elf`）、
-   `org.eclipse.cdt.launch.PROJECT_ATTR`、`MAPPED_RESOURCE_PATHS` 里的 `/旧名`
+   `org.eclipse.cdt.launch.PROJECT_ATTR`、`org.eclipse.debug.core.MAPPED_RESOURCE_PATHS`
+   （注意：其 `<listEntry>` 值是 **bare 工程名**（如 `LCD_8bit`），无前导 `/`——经真实文件核实）
 4. `.template`：`Target Path=obj/<新名>.hex`
 5. `.wvsln`（若被编组）：`BuildOrder=` 行与成员路径
 6. 文件夹本身**不重命名**（MRS2 同款行为：只改显示名）
+7. 写盘顺序建议：`.launch` 先写（最可能被占用/失败），`.project` 最后写作为提交点——中途失败
+   不留永久不一致。
 
 ## .cproject — 构建配置（CDT XML，编译唯一真相）
 
@@ -113,6 +116,22 @@ WCH 专属库（`option.c.linker.libs` 里出现）：`-lprintf`（SPI printf）
 `-lIQmath_RV32`。`configuration` 的 `artifactName` 几乎都是 `${ProjName}`；
 `buildArtefactType.exe` = 可执行，`...buildArtefactType.staticLibrary` = 静态库。
 
+### 写回位置规则（属性宿主元素，放错位置 MRS2 读不到）
+
+经 MRS2 读写两端验证的宿主规则——**改这些属性必须落对元素**：
+
+- 内层 `<configuration>`（`cconfiguration` 只是包装，其子全是 storageModule）承载：
+  `artifactName`、`buildArtefactType`、`buildProperties`、`name`（=构建目录名）、
+  `artifactExtension`。**`buildArtefactType` 独立属性与 `buildProperties` 逗号列表里的
+  同名项必须同步改**（MRS2 先读独立属性）。
+- `outputPrefix` 在 **C/C++ Linker 的 `<tool>` 元素**上，不在 configuration。
+- Pre/Post-build 步骤的描述属性名是 `preannouncebuildStep` / `postannouncebuildStep`
+  （不是 `prebuildDescription`）；命令在 `prebuildStep` / `postbuildStep`。
+- `<sourceEntries>` 是内层 `<configuration>` 的**直接子元素**（与 `folderInfo` 平级）。
+- 产物扩展名：CDT 真相是 configuration 的 `artifactExtension` 属性（`elf`/`a`/`axf`），
+  不是 option。
+- 改动任何属性后用脚本 `show`（或 MRS2 打开）回读验证仍可解析。
+
 ### sourceEntries — 参与编译的源码范围与排除（两种并存风格）
 
 ```xml
@@ -156,8 +175,23 @@ PeripheralVersion=3.1
 TempratureScope=CH32V307VCT6{-40℃~85℃}
 ```
 
+**下载参数键全集**（MRS2 下载设置页实际读写的全部键，布尔为小写 `true`/`false`）：
+
+| 键 | 取值 / 含义 |
+|---|---|
+| `CLKSpeed` | `High=1` / `Middle=2` / `Low=3`（WCH-Link 时钟档） |
+| `DebugInterfaceMode` | `0`=1-wire（SDI 一线） / `1`=2-wires（两线） |
+| `Flash Type` | 芯片 flash 类型标识（来自芯片库） |
+| `Address` | 下载地址，严格 `0x`+1-8 位 hex |
+| `Target Path` | 烧录文件（相对工程根，通常 `obj/<名>.hex`） |
+| `Erase All` / `Program` / `Verify` / `Reset` | 流程开关 |
+| `SDIPrintf` | SPI Printf 使能（对应 `-lprintf`） |
+| `Disable Code-Protect` | 关读保护 |
+| `Clear CodeFlash` | 清 code flash |
+| `Disable Power Output` | 关 WCH-Link 电源输出 |
+
 要点：键值 `K=V`、空行分节、支持中文（文件按 ANSI/GBK 或 UTF-8 都可能遇到，读时双编码尝试）；
-`Address` 格式严格 `0x` + 1-8 位十六进制。烧录引擎语义见 flash-debug.md。
+写回时**未改动行保持原字节**（含等号前空白的原始间距），只在变化行重写。烧录引擎语义见 flash-debug.md。
 
 ## .launch — 调试配置（Eclipse XML）
 
@@ -193,8 +227,17 @@ BuildOrder=LED,USART,Timer                                ← 按工程显示名
 ## 宏与路径
 
 - `${ProjName}` → `.project` 的 `<name>`。
-- `${workspace_loc:/${ProjName}/X}` → **本工程目录**下 `X`（.cproject 里 99% 都是这种形式）。
+- **`${project}/X` → 本工程目录下 `X`**（MRS2 新版属性页写出的短宏；老 EVT 用下一种）。
+- `${workspace_loc:/${ProjName}/X}` → **本工程目录**下 `X`（.cproject 里老工程 99% 是这种形式）。
 - `${workspace_loc:/OtherProject/X}` → Eclipse 语义是工作区根下，MRS2/MRVC 均按工程根处理
   （坑：多工程 solution 中会指错，见 gotchas.md）。
 - `${eclipse_home}` → MRS1 安装根（MRS2 时代视为遗留，跳过）。
-- 列表项常带字面引号（`&quot;${workspace_loc:...}&quot;`），取值时剥引号。
+- 列表项常带字面引号（`&quot;${workspace_loc:...}&quot;`），取值时剥引号；**新写的路径宏
+  推荐用 `${project}/X` 形式**（MRS2 新版同款，两种 MRS2 都能读）。
+
+### 宏定义（-D）的书写格式
+
+`NAME=VALUE` 或裸 `NAME`（= 空值）；**值可含字面引号**（如 `STR="abc"`，存储为
+`&quot;abc&quot;`，取值时只剥成对包裹的外层引号，不动值内引号）；宏名**大小写敏感**。
+同一工程 C / C++ / Assembler 三页的宏列表相互独立，同名不同值在 MRS2 属性页 Apply 时会
+弹冲突确认（bare 名视作空值参与比对）。

@@ -319,7 +319,8 @@ class Project:
     def resolve_value(self, raw):
         """剥引号 + 宏解析 → 绝对路径；不可解析返回 None。
 
-        处理两种 MRS2 现实形式：
+        处理的 MRS2 现实形式：
+        - ${project}/X —— 新版属性页短宏 → 工程根/X
         - ${workspace_loc:/${ProjName}/X} —— 替换后首段=工程名，须剥掉（否则多拼一层）
         - ${workspace_loc:/LED/StdPeriphDriver/inc} —— 首段=链接文件夹名时穿透到链接目标
         """
@@ -327,6 +328,10 @@ class Project:
         if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
             v = v[1:-1]
         v = v.replace('${ProjName}', self.name)
+        m = re.match(r'^\$\{project\}[/\\]?(.*)$', v, re.I)
+        if m:
+            tail = m.group(1).replace('/', os.sep)
+            return os.path.normpath(os.path.join(self.root, tail)) if tail else self.root
         m = re.fullmatch(r'\$\{workspace_loc:/([^}]+)\}', v)
         if m:
             v = m.group(1)
