@@ -54,37 +54,6 @@ $MRS2\                                      ← 安装根（默认 C:\MounRiver\
 4. 判定：`<候选>\resources\app\resources\win32\components\WCH\manifest.json` 存在即命中；
    也接受用户直接填到 `...\win32` 这一层（此时安装根 = 往上 3 级）。
 
-## 探测失败：向用户收集安装目录
-
-自动探测失败后，**先自己再排一遍再开口问**：全盘 `where /R` 太慢不要用；改用
-`ls -d /c/MounRiver* /d/MounRiver* /e/MounRiver* 2>/dev/null` 扫各盘根，再看
-`C:\Program Files*`、`%LOCALAPPDATA%\Programs`；检查环境变量 `MRS2_HOME` 是否已设；
-这些全部落空再向用户提问。
-
-**引导话术（按命中率排序）**：
-
-1. 「右键桌面或开始菜单里的 MounRiver Studio 2 快捷方式 → 属性 → 『目标』一栏就是
-   `...\MounRiver Studio 2.exe`，把 exe 所在的目录（去掉文件名）发我即可。」
-2. 「MRS2 安装时默认装在 `C:\MounRiver\MounRiver_Studio2`，如果当时改过盘符/目录，告诉我实际路径。」
-3. 用户发来的是 `MounRiver Studio 2.exe` 完整路径时：安装根 = exe 所在目录（Electron 壳在安装根顶层）。
-
-**拿到候选路径后先验证再使用**：检查 `<路径>\resources\app\resources\win32\components\WCH\manifest.json`
-存在（或用户给到 `win32` 层）。验证通过后建议用户设 `MRS2_HOME` 环境变量或今后带 `--mrs2` 参数，
-一次沟通长期生效。
-
-**常见变体与坑**：
-
-- **MRS1 ≠ MRS2**：`MounRiver_Studio`（不带 2）是老版 MRS1，目录里没有 `resources\app\resources\win32`
-  资源层，manifest 判定会失败——明确告知用户装的是 MRS1，其工具链布局不同，本 skill 只部分适用
-  （工程文件格式兼容，安装目录结构不通用）。
-- 非默认盘符（D/E 盘）、目录名含空格（`MounRiver Studio 2` 旧命名风格）都合法，以 manifest 判定为准。
-- 路径含中文通常也能用，但 OpenOCD cfg / makefile 场景按 gotchas.md 的编码规则处理，能换纯英文路径就建议换。
-
-**用户没装 MRS2 时**：解析/修改/发现工程文件**不需要** MRS2（纯文本/XML 操作）；编译需要工具链、
-烧录需要 OpenOCD，二者默认都取自 MRS2 目录。此时问用户选哪条：(a) 安装 MRS2（WCH 官网免费，
-一劳永逸）；(b) 机器上已有独立 RISC-V 工具链/OpenOCD 时给出路径，按 build.md / flash-debug.md
-手动指定；(c) 只做工程文件级操作，不涉及编译烧录。
-
 ## sub_manifest.json（工具链清单）
 
 `Toolchain\sub_manifest.json` 的 `details[]` 是工具链唯一可信来源，关键字段：

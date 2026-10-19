@@ -1,20 +1,14 @@
 # MRS2 烧录、调试与芯片操作
 
-## 烧录引擎（两条路线，先分清）
-
-- **MRS2 IDE 的 Download 按钮不走 OpenOCD**：走 WCH 原生 DLL（见下"McuCompilerDll"节），
-  OpenOCD 在 MRS2 里**只用于调试**。
-- **命令行烧录走 OpenOCD + WCH-Link**（本 skill 的路线）：开放、可脚本化，cfg 语义全透明。
+## 烧录引擎（OpenOCD + WCH-Link）
 
 可执行文件：`$MRS2\resources\app\resources\win32\components\WCH\OpenOCD\OpenOCD\bin\openocd.exe`
 
-板配置（-f 顺序敏感，板 cfg 在前、脚本在后）。**芯片系列不参与 cfg 选择**——选 cfg 只看内核
-与核数，地址差异全部由 `.template` 的 `Address` 承载（CH58x=0x00000000、CH32V3xx/CH32H417
-=0x08000000 等）：
+板配置（-f 顺序敏感，板 cfg 在前、脚本在后）：
 
 | cfg | 场景 |
 |---|---|
-| `wch-riscv.cfg` | RISC-V 单核（CH32V 系列、CH56x/57x/58x/59x）——默认 |
+| `wch-riscv.cfg` | 默认 RISC-V（CH32V 系列、CH56x/57x/58x/59x） |
 | `wch-dual-core.cfg` | CH32H417 双核（V3F/V5F；core1 flash bank 在 0x00005000） |
 | `wch-arm.cfg` / `wch32f103.cfg` | ARM 系列 |
 | `openocd_jlink.cfg` / `openocd_gdlink_riscv.cfg` | 第三方调试器 |
@@ -72,28 +66,20 @@ shutdown
 调用：`openocd.exe -f <板cfg> -f <脚本cfg>`。自定义板 cfg（用户自备）时 eraseAll 的 bank 数
 按 1 处理，避免对不存在的 bank 1 执行 erase_sector 导致脚本中止、后续 write_image 不执行。
 
-## McuCompilerDll 原生操作（下载/读保护/chipID/存储分配）
+## WCH-Link 底层操作（读保护/chipID/存储分配等）
 
 GUI 路径：`Others\SWDTool`（WCH-LinkUtility）——读保护开关、调试器模式切换、固件升级等
 深度操作优先引导用户用它。
 
-命令行路径（MRS2 Download 按钮与 MRVC 先例）：32 位 PowerShell P/Invoke `McuCompilerDll.dll`
-（在 `Others\CommunicationLib\default\`，OpenOCD bin 目录里也有一份）：
+命令行路径（MRVC 先例）：32 位 PowerShell P/Invoke `McuCompilerDll.dll`（在
+`Others\CommunicationLib\default\`，OpenOCD bin 目录里也有一份）：
 
 - 必须 32 位宿主：`C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`（64 位进程
-  无法加载 32 位 DLL；MRS2 宿主本身是 32 位 Electron）。
+  无法加载 32 位 DLL）。
 - `Add-Type` 内联 C#：`[DllImport("McuCompilerDll.dll", CallingConvention = CallingConvention.StdCall)]`
   声明 int 参数导出函数；操作序列与 chipID 从芯片库 `<系列>-flash.json` 的 `id` 字段来。
-- **一次完整下载的调用骨架**：`SetTargetChip(chipID, dbgMode)` → 操作 → 读保护类操作后
-  **延时 200ms 回读确认**（状态非即时生效）。`MRSFunc_FlashOperationExB(chipID, clkSpeed,
-  选项位掩码, address, file)` 是 MRS2 Download 的实际入口，位掩码：erase=8 / program=4 /
-  verify=2 / reset=1（可按位组合）。
-- 常用返回/状态语义：`QueryRProtect` 返回 **3=读保护使能、4=已解除**；`DisableDbgInterface`
-  返回 3=芯片不支持该操作；`GetMemType` 返回值**十位=存储组别(A-F)、个位=选项序号**。
 - 能力开关（`support_readProtectOpts` / `support_eraseCodeFlash` / `support_memoryAssign` /
   `support_eraseAll` …）为 false 的操作在该芯片上不可用，UI 上应禁用。
-- WCH-Link 自身有**两套固件模式**（FIRMWARE_CH549 / DAP_CH549.bin 两阶段互切）——Target
-  Mode 切换不要用 DLL 硬做，引导用户用 WCH-LinkUtility。
 - PS 输出按"最后一行是 JSON"提取（`ConvertTo-Json` 会把非 ASCII 转义成 `\uXXXX`，天然避开
   代码页问题）；PS 脚本文件要带 UTF-8 BOM 写入。
 - 每次调用都要 1-3 秒 Add-Type 编译开销；这是 MRS2 同款架构的固有成本。

@@ -319,8 +319,7 @@ class Project:
     def resolve_value(self, raw):
         """剥引号 + 宏解析 → 绝对路径；不可解析返回 None。
 
-        处理的 MRS2 现实形式：
-        - ${project}/X —— 新版属性页短宏 → 工程根/X
+        处理两种 MRS2 现实形式：
         - ${workspace_loc:/${ProjName}/X} —— 替换后首段=工程名，须剥掉（否则多拼一层）
         - ${workspace_loc:/LED/StdPeriphDriver/inc} —— 首段=链接文件夹名时穿透到链接目标
         """
@@ -328,10 +327,6 @@ class Project:
         if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
             v = v[1:-1]
         v = v.replace('${ProjName}', self.name)
-        m = re.match(r'^\$\{project\}[/\\]?(.*)$', v, re.I)
-        if m:
-            tail = m.group(1).replace('/', os.sep)
-            return os.path.normpath(os.path.join(self.root, tail)) if tail else self.root
         m = re.fullmatch(r'\$\{workspace_loc:/([^}]+)\}', v)
         if m:
             v = m.group(1)
@@ -766,6 +761,34 @@ def cmd_find(args):
     print('-- %d 个工程, %d 个 solution (深度 %d)' % (len(projects), len(solutions), depth))
 
 
+# ---- 路径字符实测矩阵（references/build.md「路径字符与 recipe 执行 shell」，逐字符实测定版）
+# recipe 经 MRS2 make bundle 的 sh 执行（PATH 上有 sh.exe 时），判定 = make 规则词 + sh 展开
+# 两层。此处只给警告，不做拒绝——工程仍可解析、可手工组装命令编译。
+def path_char_warnings(root, linked, sources, user_objs, libs):
+    ws = []
+    if '`' in root:
+        ws.append('工程路径含反引号 (%s): sh 在双引号内仍命令替换, MRS2/MRVC 均无法构建' % root)
+    if any(lf.get('resolved') for lf in linked) and (';' in root or '#' in root):
+        ws.append('工程路径含 ; 或 # 且带链接目录: 链接规则 prereq 为绝对路径, 字符进 make 规则词'
+                  '不可表达 (MRS2 同败, 其还会把 # 误写成 %)')
+    for lf in linked:
+        rp = lf.get('resolved')
+        bad = [c for c in ';#`' if rp and c in rp]
+        if bad:
+            ws.append('链接目录 %s 解析路径含 %s: 不可构建 (%s)' % (lf['name'], '/'.join(bad), rp))
+    bad_objs = [o for o in user_objs if re.search(r"[;#`&()'\[\]]", o)]
+    if bad_objs:
+        ws.append('Other Objects 含 ; # 反引号 & ( ) \' [ ]: 链接配方无引号展开, 会拆命令/破引号/'
+                  'glob 到错误对象: %s' % ' | '.join(bad_objs[:3]))
+    bad_libs = [l for l in libs if not re.fullmatch(r'[A-Za-z0-9._+-]+', l)]
+    if bad_libs:
+        ws.append('库名仅允许字母/数字/._+- (其余字符会在链接 sh 中执行命令): %s' % ', '.join(bad_libs))
+    bad_srcs = [s for s in sources if re.search(r"[();#`]", os.path.basename(s))]
+    if bad_srcs:
+        ws.append('源文件名含 ( ) ; # 反引号不在支持范围: %s' % ', '.join(bad_srcs[:3]))
+    return ws
+
+
 def project_summary(proj, inst=None):
     tc_prefix = proj.prefix()
     tc = None
@@ -796,6 +819,9 @@ def project_summary(proj, inst=None):
             rp = os.path.normpath(loc)
         linked.append({'name': nm, 'raw': loc, 'resolved': rp,
                        'exists': bool(rp and os.path.exists(rp))})
+    user_objs = [_strip_paired_quotes(v)
+                 for v in proj.option_list(('cpp' if proj.is_cpp else 'c') + '.linker.otherobjs')]
+    warnings = path_char_warnings(proj.root, linked, sources, user_objs, libs)
     tmpl = proj.template
     address = tmpl.get('Address') or infer_flash_address(sources) or ''
     chip = None
@@ -824,7 +850,7 @@ def project_summary(proj, inst=None):
         'sources': sources,
         'source_count': {k: sum(1 for s in sources if os.path.splitext(s)[1] in v)
                          for k, v in (('c', SRC_C), ('cpp', SRC_CPP), ('asm', SRC_ASM))},
-        'linked_folders': linked,
+        'linked_folders': linked, 'build_warnings': warnings,
         'template': tmpl, 'flash_address': address,
         'chipdb': chip,
         'artifacts': {k: (v if os.path.isfile(v) else None) for k, v in artifacts.items()},
@@ -845,6 +871,8 @@ def cmd_show(args):
         return
     print('工程:    %s  (%s)' % (s['name'], s['dir']))
     print('标记:    %s   C++: %s   构建: %s/' % (s['marker'], s['is_cpp'], s['config_name']))
+    for w in s['build_warnings']:
+        print('警告:    %s' % w)
     print('产物:    %s.%s (%s)' % (s['artifact_base'], s['artifact_ext'], s['artifact_type']))
     print('工具链:  prefix=%s  选中=%s' % (s['toolchain_prefix'] or '(未设)', s['toolchain_selected'] or '(需安装)'))
     if s['march_mabi']:

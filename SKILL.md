@@ -24,27 +24,12 @@ WCH（南京沁恒）官方 IDE，用于 CH32 / CH56x / CH57x / CH58x / CH59x �
 - 脚本：`python <skill目录>/scripts/mrs2.py <子命令>`，Python 3.8+ 纯标准库。
 - 完整目录结构、工具链解析、芯片库见 `references/install-layout.md`（定位工具前必读）。
 
-## 信息不足时先问用户（不要猜）
-
-面向"客户的机器"干活时，以下信息缺失**必须先问清再动手**，逐条给出引导话术：
-
-| 缺失信息 | 何时必须问 | 问法要点 |
-|---|---|---|
-| **MRS2 安装目录** | 探测失败（常见位置均无 manifest.json） | 教用户找：开始菜单/桌面右键 MounRiver Studio 2 快捷方式 → 属性 → "目标"栏即安装根；或问"安装时选的目录是？（默认 `C:\MounRiver\MounRiver_Studio2`）"。拿到后先验证判定标志再继续。详见 install-layout.md |
-| **装没装 MRS2** | 用户机器上完全没有 MRS2 | 说明前提：解析/修改工程文件不需要 MRS2，但**编译/烧录必须**有（工具链和 OpenOCD 都在其中）；问用户是装 MRS2（WCH 官网免费）还是只需做文件级操作 |
-| **芯片型号 / 工程目录** | 用户只说"帮我编译 CH32 的工程"之类模糊需求 | 让用户给出工程目录（含 `.wvproj`/`.project` 的那层），或先用 `find` 在用户给的大目录里扫，把候选列出来让用户挑，不要擅自选 |
-| **下载地址** | `.template` 无 `Address=` 且推断规则无果 | 问用户目标芯片的确切型号，用 `chips` 查地址后让用户确认；**不要猜地址**（铁律 5） |
-| **调试器类型** | 烧录/调试前未知 | WCH-Link / WCH-LinkE / J-Link / GD-Link 对应不同 OpenOCD cfg（见 flash-debug.md）；顺便确认目标板已上电、接线（SWD）正常 |
-| **是否全片擦除** | `.template` 未写且无法从工程推断 | 全片擦除会清掉芯片上全部内容——**破坏性操作，必须用户明确同意**才执行，默认按普通擦除走 |
-| **多配置选哪个** | `.cproject` 有多个 configuration（如 obj+dbg） | 列出配置名让用户挑；`.cproject` 的 `activeConfiguration` 可作默认建议 |
-| **改配置的范围** | 要修改 `.cproject`/`.project`（改宏、排除、链接脚本等） | 先说明要改什么、影响什么，确认后先备份再动手（铁律 1）；批量/跨工程改动尤其要先让用户过目清单 |
-
 ## 快速决策表
 
 | 任务 | 命令 |
 |---|---|
 | 找工程（EVT 树/任意目录递归） | `python scripts/mrs2.py find <目录>` |
-| 解析一个工程（配置/源文件/排除/下载信息） | `python scripts/mrs2.py show <工程目录>` |
+| 解析一个工程（配置/源文件/排除/下载信息 + 路径字符可构建性警告） | `python scripts/mrs2.py show <工程目录>` |
 | 列出 MRS2 工具链（GCC8/12/15/ARM） | `python scripts/mrs2.py toolchain [--mrs2 <路径>]` |
 | 查芯片库（型号/地址/能力/chipID） | `python scripts/mrs2.py chips [--series CH32V307]` |
 | 解析 solution | `python scripts/mrs2.py sln <文件.wvsln>` |
@@ -69,7 +54,7 @@ WCH（南京沁恒）官方 IDE，用于 CH32 / CH56x / CH57x / CH58x / CH59x �
 |---|---|
 | 解析或**修改** `.project`/`.cproject`/`.template`/`.wvsln`/`.launch` 之前 | `references/project-formats.md` |
 | 定位工具链/OpenOCD/make/芯片库/GUI 工具之前 | `references/install-layout.md` |
-| 编译（makefile 复用或手动组装）与 IntelliSense/CDB 配置之前 | `references/build.md` |
+| 编译（生成 makefile 或直接调用工具链）之前 | `references/build.md` |
 | 烧录、调试、读保护、芯片操作之前 | `references/flash-debug.md` |
 | 编译/烧录失败排错、路径异常、中文乱码 | `references/gotchas.md` |
 
