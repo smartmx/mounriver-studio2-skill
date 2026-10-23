@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""mrs2.py — MounRiver Studio 2 (MRS2) 工程命令行工具（无需 MRS2 IDE）。
+"""mrs2.py — MounRiver Studio 2/3 (MRS2/MRS3) 工程命令行工具（无需 IDE）。
 
 子命令:
-  find      递归发现 MRS2 工程 (.wvproj/.project) 与 solution (.wvsln)
-  show      解析一个工程的全部配置并输出摘要
-  toolchain 列出 MRS2 安装目录里的工具链 (sub_manifest.json)
+  find      递归发现工程 (.wvproj/.project) 与 solution (.wvsln)
+  show      解析一个工程的全部配置并输出摘要（含路径字符可构建性警告）
+  toolchain 列出安装目录里的工具链 (Toolchain\\sub_manifest.json)
   chips     扫描芯片库 (SDK/default) 的系列/型号/下载地址/能力
   sln       解析 .wvsln solution 文件
-  build     直接调用工具链编译（等价 MRS2 managed build 的命令行复现）
-  flash     OpenOCD + WCH-Link 烧录（含 WCH 双重地址语义）
 
-环境: Windows + MRS2 安装目录（--mrs2 或 MRS2_HOME 或常见位置探测）。
-Python 3.8+，仅标准库。工具链/OpenOCD 均来自 MRS2 安装目录。
+环境: Windows + MounRiver Studio 2 或 3 的安装目录（两代目录结构同构）。路径来源按优先级：
+--mrs2 <安装根> → 环境变量 MRS2_HOME / MRS3_HOME → WCH 官方默认安装位置
+C:\\MounRiver\\MounRiver_Studio2 / MounRiver_Studio3（MRS2 在前，仅兜底）。
+都不存在时报错并提示"需已安装 MRS2 或 MRS3、请提供安装路径"。
+Python 3.8+，仅标准库。工具链/OpenOCD 均来自定位到的安装目录。
 """
 import argparse
 import codecs
@@ -63,9 +64,11 @@ def write_ansi(p, s):
 # ---------------------------------------------------------------- install
 
 class Mrs2Install:
-    def __init__(self, root, win32):
-        self.root = root                       # 安装根，如 D:\MounRiver\MounRiver_Studio2
+    def __init__(self, root, win32, flavor='unknown', label='MounRiver Studio'):
+        self.root = root                       # 安装根（由用户提供的路径）
         self.win32 = win32
+        self.flavor = flavor                   # mrs2 / mrs3 / unknown
+        self.label = label                     # 品牌全名（product.json 的 nameShort）
         wc = os.path.join(win32, 'components', 'WCH')
         self.toolchain_dir = os.path.join(wc, 'Toolchain')
         self.openocd_bin = os.path.join(wc, 'OpenOCD', 'OpenOCD', 'bin')
@@ -77,27 +80,70 @@ class Mrs2Install:
         return self.win32
 
 
+def detect_flavor(root):
+    """代次判定。MRS2/MRS3 目录同构，唯一区分点是品牌文件：product.json 的 mrsVersion
+    主号（2/3）权威；nameShort/applicationName 品牌串与安装根启动器 exe 名兜底
+    （逻辑与 MRVC toolchain.ts detectFlavor 一致）。"""
+    label = ''
+    try:
+        pj = os.path.join(root, 'resources', 'app', 'product.json')
+        if os.path.isfile(pj):
+            j = json.loads(read_text(pj))
+            label = (j.get('nameShort') or '').strip()
+            major = (j.get('mrsVersion') or '').strip().split('.', 1)[0]
+            if major in ('2', '3'):
+                return 'mrs' + major, label or 'MounRiver Studio ' + major
+            branding = ((j.get('nameShort') or '') + ' ' + (j.get('applicationName') or '')).lower()
+            if re.search(r'studio\s*3|studio-3', branding):
+                return 'mrs3', label or 'MounRiver Studio 3'
+            if re.search(r'studio\s*2|studio-2', branding):
+                return 'mrs2', label or 'MounRiver Studio 2'
+    except Exception:
+        pass                                   # 坏 product.json → 走启动器兜底
+    try:
+        names = {f.lower() for f in os.listdir(root)}
+    except OSError:
+        names = set()
+    if 'mounriver studio 3.exe' in names:
+        return 'mrs3', label or 'MounRiver Studio 3'
+    if 'mounriver studio 2.exe' in names:
+        return 'mrs2', label or 'MounRiver Studio 2'
+    return 'unknown', label or 'MounRiver Studio'
+
+
 def find_install(explicit=None):
+    """定位 MounRiver 安装目录，按优先级：显式路径 → 环境变量 → WCH 官方默认安装位置。
+
+    --mrs2 参数优先；其次 MRS2_HOME / MRS3_HOME；最后兜底探测 WCH 安装器的默认位置
+    C:\\MounRiver\\MounRiver_Studio2、C:\\MounRiver\\MounRiver_Studio3（MRS2 在前——
+    只有显式提供才切到别的目录/代次）。全都没有时报错并提示"需已安装 MRS2 或 MRS3、
+    请提供安装路径"，不枚举其他目录。"""
     cands = []
     if explicit:
         cands.append(explicit)
-    if os.environ.get('MRS2_HOME'):
-        cands.append(os.environ['MRS2_HOME'])
-    cands += [r'C:\MounRiver\MounRiver_Studio2', r'D:\MounRiver\MounRiver_Studio2',
-              r'C:\MounRiver\MounRiver Studio 2', r'D:\MounRiver\MounRiver Studio 2']
+    for var in ('MRS2_HOME', 'MRS3_HOME'):
+        if os.environ.get(var):
+            cands.append(os.environ[var])
+    # 兜底：WCH 安装器的默认安装位置（通用约定；显式提供优先）
+    cands += [r'C:\MounRiver\MounRiver_Studio2', r'C:\MounRiver\MounRiver_Studio3']
     marker_rel = os.path.join('resources', 'app', 'resources', 'win32', 'components', 'WCH', 'manifest.json')
     for c in cands:
         c = c.strip().strip('"')
         if os.path.isfile(os.path.join(c, *marker_rel.split(os.sep))):
-            return Mrs2Install(c, os.path.join(c, 'resources', 'app', 'resources', 'win32'))
-        # 允许直接填到 .../win32 这一层
+            return Mrs2Install(c, os.path.join(c, 'resources', 'app', 'resources', 'win32'),
+                               *detect_flavor(c))
+        # 允许直接填到 .../win32 这一层（win32 → resources → app → 安装根：4 跳）
         if os.path.isfile(os.path.join(c, 'components', 'WCH', 'manifest.json')):
             root = c
-            for _ in range(3):
+            for _ in range(4):
                 root = os.path.dirname(root)
-            return Mrs2Install(root, c)
-    raise SystemExit('[mrs2] 找不到 MRS2 安装目录：请用 --mrs2 <安装根> 指定，或设置环境变量 MRS2_HOME。\n'
-                     '       判定标志: <安装根>\\resources\\app\\resources\\win32\\components\\WCH\\manifest.json')
+            return Mrs2Install(root, c, *detect_flavor(root))
+    raise SystemExit(
+        '[mrs2] 未找到有效的 MounRiver Studio 安装：请先确认已安装 MRS2 或 MRS3，'
+        '然后用 --mrs2 <安装根> 指定安装路径（或设置环境变量 MRS2_HOME / MRS3_HOME）。\n'
+        '       已检查: %s\n'
+        '       判定标志: <安装根>\\resources\\app\\resources\\win32\\components\\WCH\\manifest.json 存在。'
+        % '；'.join(cands))
 
 
 # ---------------------------------------------------------------- toolchain
@@ -132,7 +178,7 @@ def load_toolchains(inst):
 def select_toolchain(inst, request, proj_prefix=None):
     tcs = load_toolchains(inst)
     if not tcs:
-        raise SystemExit('[mrs2] MRS2 未安装任何工具链: %s' % inst.toolchain_dir)
+        raise SystemExit('[mrs2] MounRiver 安装里没装任何工具链: %s' % inst.toolchain_dir)
     if request and request.lower() not in ('auto', ''):
         for t in tcs:
             if t['name'].lower() == request.lower():
@@ -219,7 +265,11 @@ class Project:
             self.name = n.strip()
         for nat in r.iter('nature'):
             self.natures.append((nat.text or '').strip())
-        self.is_cpp = 'org.eclipse.cdt.core.cxxnature' in self.natures
+        # CDT/MRS2 的 C++ nature 真 ID 是 org.eclipse.cdt.core.ccnature；
+        # "cxxnature" 不存在（MRS2 自带扩展里没有这个串，只有 bug 版工具写坏的
+        # 项目带它）——两者都接受，与 MRS2 的判定对齐，勿只认假 ID。
+        self.is_cpp = any(n in self.natures for n in (
+            'org.eclipse.cdt.core.ccnature', 'org.eclipse.cdt.core.cxxnature'))
         for link in r.iter('link'):
             nm = (link.findtext('name') or '').strip()
             loc = link.findtext('locationURI') or link.findtext('location') or ''
@@ -601,8 +651,10 @@ def common_flags(proj, tc_name, for_arm=False):
 
 
 def lang_std(proj):
-    std = proj.option_enum('c.compiler.std')
-    return ['-std=' + std] if std else []
+    """语言标准按工程类型取对应侧（C++ 工程读 cpp.compiler.std，两套值可能不同）。
+    枚举尾段是 gnucpp17 形态——真实旗标是 gnu++17（把 cpp 还原成 ++）。"""
+    std = proj.option_enum(('cpp' if proj.is_cpp else 'c') + '.compiler.std')
+    return ['-std=' + std.replace('cpp', '++')] if std else []
 
 
 def include_flags(proj, suffix, warn_missing=True):
@@ -801,9 +853,10 @@ def project_summary(proj, inst=None):
             pass
     for_arm = bool(tc and tc['type'] == 'ARM')
     common = common_flags(proj, tc_name or 'GCC12', for_arm=for_arm)
-    inc, inc_missing = include_flags(proj, 'c.compiler.include.paths')
+    side = 'cpp' if proj.is_cpp else 'c'   # C++ 工程读 cpp.* 侧（两套值本就有意不同）
+    inc, inc_missing = include_flags(proj, side + '.compiler.include.paths')
     asm_inc, _ = include_flags(proj, 'assembler.include.paths', warn_missing=False)
-    defs = define_flags(proj, 'c.compiler.defs')
+    defs = define_flags(proj, side + '.compiler.defs')
     lflags, libs = linker_flags(proj, tc_name or 'GCC12')
     sources = scan_sources(proj)
     linked = []
@@ -874,7 +927,8 @@ def cmd_show(args):
     for w in s['build_warnings']:
         print('警告:    %s' % w)
     print('产物:    %s.%s (%s)' % (s['artifact_base'], s['artifact_ext'], s['artifact_type']))
-    print('工具链:  prefix=%s  选中=%s' % (s['toolchain_prefix'] or '(未设)', s['toolchain_selected'] or '(需安装)'))
+    print('工具链:  prefix=%s  选中=%s' % (s['toolchain_prefix'] or '(未设)',
+                                            s['toolchain_selected'] or '(未提供安装路径)'))
     if s['march_mabi']:
         print('目标:    %s %s' % tuple(s['march_mabi']))
     print('公共旗标: %s' % ' '.join(s['common_flags']))
@@ -911,9 +965,10 @@ def cmd_toolchain(args):
     inst = find_install(args.mrs2)
     tcs = load_toolchains(inst)
     if args.json:
-        print(json.dumps({'install': inst.win32, 'toolchains': tcs}, ensure_ascii=False, indent=2))
+        print(json.dumps({'install': inst.win32, 'flavor': inst.flavor, 'label': inst.label,
+                          'toolchains': tcs}, ensure_ascii=False, indent=2))
         return
-    print('MRS2: %s' % inst.win32)
+    print('安装: %s  [%s]' % (inst.win32, inst.label))
     for t in tcs:
         ok = os.path.isfile(os.path.join(t['dir'], 'bin', t['gcc'] + '.exe'))
         print('  %-6s %-8s %-22s %s  [%s]' % (t['name'], t['type'], t['prefix'], t['dir'],
@@ -984,8 +1039,11 @@ def cmd_sln(args):
 # ---------------------------------------------------------------- main
 
 def main():
-    ap = argparse.ArgumentParser(prog='mrs2.py', description='MRS2 工程命令行工具（无需 MRS2 IDE）')
-    ap.add_argument('--mrs2', help='MRS2 安装根目录（默认探测 C:\\MounRiver\\MounRiver_Studio2 等）')
+    ap = argparse.ArgumentParser(prog='mrs2.py', description='MounRiver Studio 2/3 (MRS2/MRS3) 工程命令行工具（无需 IDE）')
+    ap.add_argument('--mrs2', help='MounRiver 安装根目录（MRS2/MRS3 通用，自动识别代次）。'
+                                   '优先本参数或环境变量 MRS2_HOME / MRS3_HOME；未提供时兜底'
+                                   '探测 WCH 默认安装位置 C:\\MounRiver\\MounRiver_Studio2 / '
+                                   'MounRiver_Studio3')
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     p = sub.add_parser('find', help='递归发现工程/solution')

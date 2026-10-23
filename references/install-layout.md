@@ -1,15 +1,18 @@
-# MRS2 安装目录结构与工具链解析
+# MRS2/MRS3 安装目录结构与工具链解析
 
-所有工具组件都在 `$MRS2\resources\app\resources\win32\` 下（MRS2 本体是 VSCode 内核套壳，
-这一层是它的资源目录）。下表路径已在 MRS2 2.x 实机核对。
+所有工具组件都在 `<安装根>\resources\app\resources\win32\` 下（MounRiver 本体是 VSCode 内核
+套壳，这一层是它的资源目录）。**MRS2 与 MRS3 的目录结构同构**——下面整棵树对两代都成立，
+工具链前缀、make bundle、OpenOCD、芯片库全部通用；区分点只有品牌/版本判定与个别组件位数
+（见「代次判定」与树内标注）。`<安装根>` 指定位到的 MounRiver Studio 2/3 安装目录
+（来源见下方「安装路径的来源」）。
 
 ## 目录总览
 
 ```
-$MRS2\                                      ← 安装根（默认 C:\MounRiver\MounRiver_Studio2）
-└── resources\app\resources\win32\
+<安装根>\                                  ← 用户提供的 MounRiver Studio 2/3 安装根
+└── resources\app\resources\win32\         ← 资源层（两代同构）
     ├── components\WCH\
-    │   ├── manifest.json                   ← 安装完整性标志文件（探测用）
+    │   ├── manifest.json                   ← 安装完整性标志文件（探测用；两代通用，不区分代次）
     │   ├── Toolchain\
     │   │   ├── sub_manifest.json           ← 工具链清单（唯一可信来源，见下）
     │   │   ├── RISC-V Embedded GCC\        ← GCC8 (v8.2)，prefix riscv-none-embed-
@@ -18,11 +21,12 @@ $MRS2\                                      ← 安装根（默认 C:\MounRiver\
     │   │   └── arm-none-eabi-gcc\          ← ARM 工具链
     │   ├── OpenOCD\
     │   │   └── OpenOCD\bin\
-    │   │       ├── openocd.exe
+    │   │       ├── openocd.exe             ← 两代均 32 位，版本同为 0.11.0+dev-snapshot
     │   │       ├── wch-riscv.cfg           ← 默认 RISC-V 板配置
     │   │       ├── wch-dual-core.cfg       ← CH32H417 双核 (V3F/V5F)
     │   │       ├── wch-arm.cfg / wch32f103.cfg / openocd_jlink.cfg / openocd_gdlink_riscv.cfg
-    │   │       └── McuCompilerDll.dll      ← WCH-Link 底层操作 DLL（32 位）
+    │   │       ├── McuCompilerDll.dll      ← 32 位拷贝（匹配 32 位 openocd 宿主；wlink 桥别用这份）
+    │   │       └── [MRS3 额外] IoCHubDLL.dll / MRSRemoteAssistant.*  ← 远程调试助手，命令行流程用不到
     │   ├── SDK\default\
     │   │   ├── ARM\<系列>\...              ← ARM 模板
     │   │   └── RISC-V\<系列>\<RTOS>\
@@ -32,27 +36,49 @@ $MRS2\                                      ← 安装根（默认 C:\MounRiver\
     │   │       └── <系列>xx.svd            ← 外设寄存器视图
     │   └── Others\
     │       ├── SWDTool\                    ← WCH-LinkUtility（调试器配置/固件升级 GUI）
-    │       ├── CommunicationLib\default\   ← McuCompilerDll.dll + load.wcfg（wlink 桥用）
+    │       ├── CommunicationLib\default\   ← McuCompilerDll.dll + load.wcfg（wlink 桥用；
+    │       │                                  位数随代次：MRS2=32 位、MRS3=64 位）
     │       ├── IQMath\                     ← WCH IQmath 库 (-lIQmath_RV32)
     │       ├── WCHISPTool\default\WchIspStudio.exe
     │       ├── WCHTouchKeyTool\default\WCHTouchKeyTool.exe
     │       ├── WCHGUIDesigner\default\WCHGUIDesigner.exe
+    │       ├── [MRS3 额外] WCHToolKit\default\WCHToolKit.exe  ← "WCH 工具集"（Electron，工具统一入口）
+    │       ├── [MRS3 额外] WCHAgent\default\opencode.exe      ← "WCH Agent"（内置助手组件；MRS2 两者皆无）
     │       └── Firmware_Link\  WCHLinkEJtagUpdTool\
     └── others\
         ├── Build_Tools\Make\bin\make.exe   ← 还有 sh.exe rm.exe mkdir.exe echo.exe busybox.exe
         ├── COMTransmit\COMTransmit.exe     ← 串口调试
         ├── HexBinStudio\HexBinStudio.exe
-        └── AssociateTool\  DemoLib\  ExTool\  KeilConvert\  LinkDrv\
+        └── AssociateTool\  DemoLib\  ExTool\ KeilConvert\ LinkDrv\
 ```
 
-## 安装目录探测算法
+**行为逆向的权威来源**：`<安装根>\resources\app\extensions\mrs-team.mrs-vscode\out\extension.js`
+——MRS2 IDE 功能的实现 bundle（webpack 压缩单行 JS，约 3.6MB，阅读前先格式化/搜串定位；
+两代同构）。工程读写行为、引号/宏处理（`EPMacroStrResolve`）、C/C++ 类型判定
+（`getEclipseProperties` 认 `ccnature`）等结论都出自它——遇到"MRS2 到底怎么处理 X"的疑问，
+直接查它比猜测可靠。
 
-1. 显式参数 `--mrs2 <路径>` 优先。
-2. 环境变量 `MRS2_HOME`。
-3. 依次探测常见位置：`C:\MounRiver\MounRiver_Studio2`、`D:\MounRiver\MounRiver_Studio2`、
-   `C:\MounRiver\MounRiver_Studio`（MRS1 无 win32 资源层，会被判定标志排除）。
-4. 判定：`<候选>\resources\app\resources\win32\components\WCH\manifest.json` 存在即命中；
-   也接受用户直接填到 `...\win32` 这一层（此时安装根 = 往上 3 级）。
+## 代次判定（MRS2 vs MRS3）
+
+布局同构，探测靠品牌文件（优先级从高到低，与 MRVC `detectFlavor` 一致）：
+
+1. `<安装根>\resources\app\product.json` 的 `mrsVersion` **主版本号**——`"2.x"` → MRS2，
+   `"3.x"` → MRS3。两代都带这个键，是权威来源（MRS3 实测 `"3.0.0"`）。
+2. 同文件的 `nameShort` / `applicationName` 品牌串（含 `Studio 3`/`studio-3` → MRS3）。
+3. 安装根下启动器 exe 是否存在：`MounRiver Studio 3.exe` / `MounRiver Studio 2.exe`。
+4. 全无 → 记为 unknown（手工拼装的安装）；`manifest.json` 两代通用，不能用来区分代次。
+
+## 安装路径的来源（按优先级）
+
+1. `--mrs2 <路径>` 参数（**MRS2/MRS3 通用**，自动识别代次）。
+2. 环境变量 `MRS2_HOME`，其次 `MRS3_HOME`。
+3. 兜底探测 WCH 安装器的默认位置：`C:\MounRiver\MounRiver_Studio2`、然后
+   `C:\MounRiver\MounRiver_Studio3`（MRS2 在前；只认这两个通用约定，不枚举其他目录）。
+4. 以上都不存在 → 报错并提示：**需要已安装 MounRiver Studio 2 或 3，请提供安装路径**。
+   MounRiver Studio 1 的安装目录没有这一层资源结构，会被判定标志自然排除。
+
+判定：`<候选>\resources\app\resources\win32\components\WCH\manifest.json` 存在即命中；
+也接受用户直接填到 `...\win32` 这一层（此时安装根 = 往上 4 级：win32 → resources → app → 安装根）。
 
 ## sub_manifest.json（工具链清单）
 
@@ -76,6 +102,8 @@ $MRS2\                                      ← 安装根（默认 C:\MounRiver\
 - **prefix 区分工具链代际**：GCC8 = `riscv-none-embed-`；GCC12 = `riscv-wch-elf-`；
   GCC15 = `riscv32-wch-elf-`。`.cproject` 里 `option.command.prefix` 存的就是这个值——
   切换工具链时必须同步改它，否则生成的命令行找不到编译器。
+  **MRS3 的 sub_manifest 结构与此完全一致、prefix 逐项相同**（两代实机核对），
+  同一工程在两代 IDE 里选同一工具链，编译命令行不变。
 - status=2 表示已安装。`.7z` 旁置文件是未解压的备份包，忽略。
 - `march` 扩展语法依赖工具链代际：GCC8 用尾缀式 `rv32imacxw`；GCC12/15 用
   `rv32imac_zba_zbb_zbc_zbs_zmmul_xw`（下划线形式），见 build.md。
@@ -114,17 +142,23 @@ $MRS2\                                      ← 安装根（默认 C:\MounRiver\
 - 模板 zip 解压即得完整工程（含 .project/.cproject/.launch/.template），新建工程 = 解压 +
   写空 `<新名>.wvproj` + 把模板显示名改成新名（改名级联见 project-formats.md）。
 
-## MRS2 Tools 菜单六个 GUI 工具
+## MRS Tools 菜单的 GUI 工具（启动器路径）
 
-WCH-LinkUtility（`Others\SWDTool`）、WchIspStudio、WCHTouchKeyTool、WCHGUIDesigner、
-HexBinStudio、COMTransmit——均可分离进程直接启动，路径见上表。涉及读保护开关、
-调试器模式切换、固件升级等深度操作时优先让用户用 WCH-LinkUtility。
+WCH-LinkUtility（`Others\SWDTool\default\WCH-LinkUtility.exe`）、WchIspStudio
+（`Others\WCHISPTool\default\`）、WCHTouchKeyTool（`Others\WCHTouchKeyTool\default\`）、
+WCHGUIDesigner（`Others\WCHGUIDesigner\default\`）、HexBinStudio（`others\HexBinStudio\`）、
+COMTransmit（`others\COMTransmit\`）——六项两代同路径，均可分离进程直接启动。
+**MRS3 另有第七项「WCH 工具集」**（`Others\WCHToolKit\default\WCHToolKit.exe`，Electron 应用，
+WCH 工具的统一入口）——MRS2 没有该组件，菜单里也不出现（调用方按生效代次门控）。
+涉及读保护开关、调试器模式切换、固件升级等深度操作时优先让用户用 WCH-LinkUtility。
 
-## PATH 组装（构建/烧录时）
+## PATH 组装（构建/烧录时，两代同理）
 
 ```
 <工具链目录>\bin ; <win32>\others\Build_Tools\Make\bin ; %PATH%
 ```
 
-make 必须用 MRS2 自带的（GNU make for Windows，依赖同目录 sh.exe/rm.exe）；
+make 必须用安装自带的（GNU make for Windows，依赖同目录 sh.exe/rm.exe）；
 手动组装命令直接调 gcc 时则只需工具链 bin。
+两代安装的构建环境完全等价：同一工程分别用 MRS2/MRS3 构建，仅 ELF 字节有少量差异
+（工具链补丁级不同），配合 MRS3 的 GCC12 主链路实编通过。

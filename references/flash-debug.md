@@ -1,8 +1,9 @@
-# MRS2 烧录、调试与芯片操作
+# MRS2/MRS3 烧录、调试与芯片操作
 
 ## 烧录引擎（OpenOCD + WCH-Link）
 
-可执行文件：`$MRS2\resources\app\resources\win32\components\WCH\OpenOCD\OpenOCD\bin\openocd.exe`
+可执行文件：`$MRS\resources\app\resources\win32\components\WCH\OpenOCD\OpenOCD\bin\openocd.exe`
+（MRS2/MRS3 同路径、同 cfg 集、同为 openocd 0.11.0+dev-snapshot 与 32 位宿主）
 
 板配置（-f 顺序敏感，板 cfg 在前、脚本在后）：
 
@@ -71,11 +72,14 @@ shutdown
 GUI 路径：`Others\SWDTool`（WCH-LinkUtility）——读保护开关、调试器模式切换、固件升级等
 深度操作优先引导用户用它。
 
-命令行路径（MRVC 先例）：32 位 PowerShell P/Invoke `McuCompilerDll.dll`（在
-`Others\CommunicationLib\default\`，OpenOCD bin 目录里也有一份）：
+命令行路径（MRVC 先例）：用与 DLL **位数匹配**的 PowerShell P/Invoke `McuCompilerDll.dll`
+（取 `Others\CommunicationLib\default\` 那份；OpenOCD bin 里另有一份 32 位拷贝、匹配 32 位
+openocd.exe，不要拿它当桥）：
 
-- 必须 32 位宿主：`C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`（64 位进程
-  无法加载 32 位 DLL）。
+- **宿主位数随安装代次**：MRS2 的 CommunicationLib DLL 是 32 位 → 用
+  `%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`；MRS3 的是 64 位 → 用
+  `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`。位数不匹配加载不了 DLL；
+  稳妥做法是读 DLL 的 PE 头 Machine 字段选宿主（0x14c=32 位 / 0x8664=64 位）。
 - `Add-Type` 内联 C#：`[DllImport("McuCompilerDll.dll", CallingConvention = CallingConvention.StdCall)]`
   声明 int 参数导出函数；操作序列与 chipID 从芯片库 `<系列>-flash.json` 的 `id` 字段来。
 - 能力开关（`support_readProtectOpts` / `support_eraseCodeFlash` / `support_memoryAssign` /

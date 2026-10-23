@@ -1,18 +1,24 @@
-# MRS2 构建原理与无 IDE 编译
+# MRS2/MRS3 构建原理与无 IDE 编译
 
-## MRS2 怎么构建（理解原理才能排错）
+## MRS2/MRS3 怎么构建（理解原理才能排错）
 
-MRS2/CDT 的 managed build：**首次构建时**根据 `.cproject` 在构建目录（配置名，即 `obj/`）生成
-CDT 风格 makefile（`makefile` / `sources.mk` / `objects.mk` / `<子目录>/subdir.mk`），之后执行
-`make -jN all`（make 用 MRS2 自带的 `others\Build_Tools\Make\bin\make.exe`）。所以：
+MounRiver/CDT 的 managed build（MRS2/MRS3 同机制）：**首次构建时**根据 `.cproject` 在构建目录
+（配置名，即 `obj/`）生成 CDT 风格 makefile（`makefile` / `sources.mk` / `objects.mk` /
+`<子目录>/subdir.mk`），之后执行 `make -jN all`（make 用安装目录自带的
+`others\Build_Tools\Make\bin\make.exe`）。所以：
 
 - obj/ 里出现 makefile 是正常产物；手工改它们会在下次重新生成时被覆盖。
 - 配置改变后 IDE 会重新生成 makefile——命令行复现构建时要么照抄生成规则，要么绕开 makefile
   直接调工具链（见下"直接编译配方"）。
-- **优先复用已有 makefile**：工程构建过一次后（MRS2/MRVC 构建过），obj/ 里有完整 makefile 集合，
+- **优先复用已有 makefile**：工程构建过一次后（MRS2/MRS3/MRVC 构建过），obj/ 里有完整 makefile 集合，
   增量/全量构建直接 `make -C obj -jN all`（make 用
-  `$MRS2\...\others\Build_Tools\Make\bin\make.exe`），不必重新推导 flags。只有从未构建过、
-  或刚改过 `.cproject` 时才需要手动组装命令。
+  `$MRS\resources\app\resources\win32\others\Build_Tools\Make\bin\make.exe`），不必重新推导 flags。
+  只有从未构建过、或刚改过 `.cproject` 时才需要手动组装命令。
+- **代次风格行为（MRS 2.3.0+ / MRS3）**：`objects.mk` 的 `LIBS` 会在配置列表后**自动追加 `-lm`**
+  （配置里没写 m 也加；缺了它，--whole-archive 进来的归档调 fabs/sqrt 会 undefined reference）；
+  **WCH 助手库（`-lIQmath_RV32` / `-lprintf` / `-lprintfloat`）不在 LIBS**，而是接在链接 recipe
+  的 `$(LIBS)` 之后。旧代次（MRS2 1.8.5–2.2.18）无此注入、助手库在 objects.mk——逐字节复现或
+  比对 makefile 时按目标代次对齐（MRS3 与 2.3+/2.5 同风格）。
 - makefile 里的路径按**系统 ANSI 代码页**写盘（zh-CN = GBK）；配方里的字面 `$` 必须写成 `$$`
   （make 先展开 `$` 序列再交给 shell；但 make 自动变量 `$@ $< $^ $* $?` 与用户写的 `$(VAR)`
   不得转义——`-Wa,-adhlns="$@.lst"` 被写成 `$$@` 后 shell 看到空值，清单静默失效）。
@@ -34,7 +40,7 @@ cmd 语义。
   USER_OBJS 这类恰好能匹配别处的独立词才致命（`[12]` 静默 glob 到别的目录链错对象）；
 - `&` `(` `)` `'` 对 make 层无害，问题只在 sh **无引号展开**层。
 
-**实测矩阵**（真实 CH592 FreeRTOS 带链接工程逐字符复制改名 + MRS2 自带 make 实编，六轮
+**实测矩阵**（真实 EVT 带链接工程逐字符复制改名 + 安装自带的 make 实编，六轮
 对抗性评审定版；MRVC 0.2.1 按此实现并带永久回归）：
 
 | 位置 | 支持 | 拒绝 |
@@ -47,7 +53,7 @@ cmd 语义。
 
 原理：工程根字符只出现在**相对 prereq** 和**引号包裹的绝对旗标参数**（`-I"path"`/`-T"path"`）
 里，永远不进规则词——所以 `(` `)` `;` `#` 都能活（EVT 发布目录带括号如
-`CH592EVT_V1.9_(20261016)` 是合法可编译的）。链接目录的文件规则用**绝对路径 prereq**（MRS2
+`CH5xxEVT_Vx.y_(YYYYMMDD)` 型的带括号发布目录是合法可编译的）。链接目录的文件规则用**绝对路径 prereq**（MRS2
 同款），根路径字符随之进规则词——`;` `#` 在此不可表达，MRS2 自己也构建失败，且其生成器会把
 根路径里的 `#` **误改写成 `%`** 产出错误路径。**反引号是唯一全通道拒绝的字符**：sh 在双引号
 内仍做命令替换（报 `EOF in backquote substitution`），连引号包裹的 include 路径里带一个反引号
@@ -59,7 +65,7 @@ cmd 语义。
 `%TEMP%` 记录文件路径非 ASCII）。构建日志看不出实际命令行时用 `make -n -B all` 干跑——
 MRS2/MRVC 的 recipe 带 `@` 静默，干跑打印全部实际命令（链接/objcopy/size 全覆盖）。
 
-## 直接编译配方（与 MRS2 等价的命令行）
+## 直接编译配方（与 MRS2/MRS3 等价的命令行）
 
 单文件编译（C 源，RISC-V）：
 
@@ -109,11 +115,11 @@ obj/<名>.bin`、`objdump -d -C -x <elf> > obj/<名>.lst`、`size <elf>`（Berke
 转正斜杠、盘符小写（MRS2 2.x 风格）→ **目录不存在则丢弃该 -I**（MRS 同款行为，FreeRTOS
 工程少一条 -I 是正常的）。`-D` 值原样保留（可能含字面引号，如 `-DSTR="abc"`）。
 
-## 与 MRS2 输出的差异（何时必须用 IDE 产物）
+## 与 IDE 输出的差异（何时必须用 IDE 产物）
 
 手动组装的目标是"命令行可复现、产物可烧录"，与 CDT makefile 的差异：
 
-| 项 | CDT/MRS2 | 手动组装 |
+| 项 | CDT（MRS2/MRS3） | 手动组装 |
 |---|---|---|
 | 目标文件布局 | obj/<子目录>/<名>.o，同名 .c 靠 CDT 去重 | 自定（建议 obj/<相对路径>.o，天然无同名冲突） |
 | 字节级 makefile | 逐字节复刻 1.9.2/2.1.0 金标 | 不经 makefile |

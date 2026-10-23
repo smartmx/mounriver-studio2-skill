@@ -1,7 +1,8 @@
-# MRS2 工程文件格式详解
+# MRS2/MRS3 工程文件格式详解
 
 六个文件构成一个工程：`.wvproj`（标记）+ `.project`（身份/链接资源）+ `.cproject`（构建配置）
-+ `.template`（下载配置）+ `.launch`（调试）+ 可选 `.wvsln`（编组）。以下全部取自真实文件。
++ `.template`（下载配置）+ `.launch`（调试）+ 可选 `.wvsln`（编组）。以下全部取自真实文件，
+格式两代通用（MRS3 用同一套格式打开/构建 MRS2 EVT 工程）。
 
 ## .wvproj — 工程标记（空文件）
 
@@ -14,29 +15,44 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <projectDescription>
   <name>CH32V307VCT6</name>          <!-- 显示名；与文件夹名、.wvproj 名、.cproject ${ProjName} 联动 -->
-  <comment/>
-  <projects/>
+  <comment/>                          <!-- 空元素两种写法同一文件里并存：<comment> 自闭合， -->
+  <projects>
+  </projects>                         <!-- <projects>/<arguments> 却写成跨行开闭对（真实文件如此） -->
   <buildSpec>
     <buildCommand>
       <name>org.eclipse.cdt.managedbuilder.core.genmakebuilder</name>
       <triggers>clean,full,incremental,</triggers>
-      <arguments/>
+      <arguments>
+      </arguments>
     </buildCommand>
     <buildCommand>
       <name>org.eclipse.cdt.managedbuilder.core.ScannerConfigBuilder</name>
       <triggers>full,incremental,</triggers>
-      <arguments/>
+      <arguments>
+      </arguments>
     </buildCommand>
   </buildSpec>
   <natures>
     <nature>org.eclipse.cdt.core.cnature</nature>            <!-- C 工程必有 -->
-    <nature>org.eclipse.cdt.core.cxxnature</nature>          <!-- C++ 工程才有；切换 C/C++ 就是增删它 -->
+    <nature>org.eclipse.cdt.core.ccnature</nature>           <!-- C++ 工程才有；切换 C/C++ = 增删它 -->
     <nature>org.eclipse.cdt.managedbuilder.core.managedBuildNature</nature>
     <nature>org.eclipse.cdt.managedbuilder.core.ScannerConfigNature</nature>
   </natures>
   <filteredResources>...</filteredResources>  <!-- IDE 视图过滤，如隐藏 *.wvproj；可忽略 -->
 </projectDescription>
 ```
+
+- **C++ nature 的真 ID 是 `org.eclipse.cdt.core.ccnature`**——MRS2 自己的判定代码（`getEclipseProperties`）
+  就按它工作：其自带扩展 bundle（`extensions\mrs-team.mrs-vscode\out\extension.js`）里只有
+  `cnature` / `ccnature` 两个串，**`cxxnature` 从头到尾不存在**（CDT 也没有这个 ID）。见到
+  `cxxnature` 的工程是被 bug 版工具写坏的：MRS2 视其为 C 工程、`.cpp` 源文件整体不参与编译。
+  修复 = 换成 `ccnature` 并补 cpp 选项集（见下「C++ 工程在 .cproject 里的三件套」）。
+- **空元素写法保真**：MRS2 把空元素写成自闭合（`<comment/>`）与跨行开闭对
+  （`<projects>\r\n\t</projects>`）两种形态、同一文件里并存（真实文件如此），另有极少数工程用
+  ` />`（斜杠前带空格）的自闭合变体。程序化写回 .project/.cproject 必须**记住每个元素的源
+  形态并按原样输出**——统一规范成 `<x/>` 会在一次无关写入里顺带重写文件里每一处这种写法
+  （真实 EVT 普查：2,687 个 .project 中 1,485 个含开闭对写法，示例文件 1,067 → 1,022 字节）。只有
+  "原本有子元素、被编辑清空"的元素才落到 `<x/>` 形式。
 
 ### linkedResources（外部链接文件夹）
 
@@ -82,7 +98,7 @@ printsize）→ `sourceEntries`。
 
 | superClass 尾段 | 含义 / 取值 |
 |---|---|
-| `option.command.prefix` | 工具链 prefix（`riscv-none-embed-` / `riscv-wch-elf-`） |
+| `option.command.prefix` | 工具链 prefix（`riscv-none-embed-` / `riscv-wch-elf-`）；大规模普查（2,685 个 .cproject、2,919 个前缀选项）**全部是裸形态**，语言限定形态 `c.command.prefix`/`cpp.command.prefix` 未实际出现（读取按"本语言 → 裸 → 另一语言"兼容即可） |
 | `option.target.isa.base` | 枚举 `option.target.arch.rv32i` 等 → `-march` 基座 |
 | `option.target.isa.multiply/compressed/atomic` | M/C/A 扩展开关 |
 | `option.target.isa.xw` | WCH XW 扩展（`-march=rv32imacxw` 的 xw） |
@@ -112,6 +128,24 @@ printsize）→ `sourceEntries`。
 WCH 专属库（`option.c.linker.libs` 里出现）：`-lprintf`（SPI printf）、`-lprintfloat`、
 `-lIQmath_RV32`。`configuration` 的 `artifactName` 几乎都是 `${ProjName}`；
 `buildArtefactType.exe` = 可执行，`...buildArtefactType.staticLibrary` = 静态库。
+
+### C++ 工程在 .cproject 里的三件套（C↔C++ 互转时逐项对齐，缺一构建即坏）
+
+1. `.project` 的 `org.eclipse.cdt.core.ccnature` nature（见上）。
+2. **cpp.* 选项集与 c.* 孪生并存**。原生 C++ 工程的两套值**本就不同**（952 个实采 C++ 工程
+   全部如此：包含路径、std、picolibc、defs 各自独立），不要"顺手同步"它们。但从 C 转 C++ 必须把
+   C 选项**整组镜像**进 cpp 集——C 工程的 cpp.* 几乎是空的，只改 nature 会得到"空 C++ 配置"：
+   链接拿不到 `-T` 脚本，报 `cannot open linker script file Link.ld`（脚本名回退成裸文件名）。
+   切回 C 时镜像值可保留（nature=C 时被忽略），但转换新增的 `<inputType>` 要删掉。
+3. **C++ 编译器的 `<inputType>`**：C++ 工程在 `GNU RISC-V Cross C++ Compiler` tool 下带
+   `<inputType id="ilg.gnumcueclipse.managedbuild.cross.riscv.tool.cpp.compiler.input.1079228323"
+   superClass="ilg.gnumcueclipse.managedbuild.cross.riscv.tool.cpp.compiler.input"/>`——MRS2
+   自家 C++ 模板用的就是这个固定 id；C 工程只有 assembler / c.compiler / c.linker 三个 inputType。
+
+**值写法保真**：`libraries` / `defined_symbols` 进 MRS2 模型是**原样**的（读侧只有路径类字段
+经 `EPMacroStrResolve` 剥引号）——库名 `m` 不要改写成 `"m"`，引号会被带进 MRS2 模型与
+`USER_OBJS`（MRS2 还会再补一层引号）；程序化复制列表值时**逐属性原样克隆**，不要经
+"剥引号→统一加引号"往返。
 
 ### sourceEntries — 参与编译的源码范围与排除（两种并存风格）
 
