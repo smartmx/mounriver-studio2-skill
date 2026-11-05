@@ -2,8 +2,12 @@
 
 ## 烧录引擎（OpenOCD + WCH-Link）
 
-可执行文件：`$MRS\resources\app\resources\win32\components\WCH\OpenOCD\OpenOCD\bin\openocd.exe`
-（MRS2/MRS3 同路径、同 cfg 集、同为 openocd 0.11.0+dev-snapshot 与 32 位宿主）
+可执行文件：`$MRS/resources/app/resources/<平台层>/components/WCH/OpenOCD/OpenOCD/bin/openocd`
+（Windows `openocd.exe`，Linux/macOS `openocd`；纯工具链包在
+`<根>/OpenOCD/OpenOCD/bin/openocd`）。MRS2/MRS3 同路径、同为 openocd 0.11.0+dev-snapshot；
+Windows 是 32 位宿主，Linux x86-64 / macOS arm64 与 IDE 同架构。**cfg 集随包略有差异**：
+Linux/macOS 可能没有 `wch32f103.cfg` / `openocd_gdlink_riscv.cfg`，macOS 多
+`openocd_jlink.cfg`（以实际 `bin/` 目录为准，不要硬编码完整列表）。
 
 板配置（-f 顺序敏感，板 cfg 在前、脚本在后）：
 
@@ -13,6 +17,35 @@
 | `wch-dual-core.cfg` | CH32H417 双核（V3F/V5F；core1 flash bank 在 0x00005000） |
 | `wch-arm.cfg` / `wch32f103.cfg` | ARM 系列 |
 | `openocd_jlink.cfg` / `openocd_gdlink_riscv.cfg` | 第三方调试器 |
+
+### 平台差异（烧录 / 调试）
+
+| 能力 | Windows | Linux | macOS |
+|---|---|---|---|
+| OpenOCD CLI | `openocd.exe` | `openocd` | `openocd` |
+| WCH-LinkUtility（GUI） | 有（`Others/SWDTool`） | 无 | 无 |
+| wlink 底层操作库 | `McuCompilerDll.dll`（P/Invoke，实测） | `libmcuupdate.so`（进程内 FFI，**未实测**） | `libmcuupdate.dylib`（进程内 FFI，**未实测**） |
+| USB 权限 | WCH 驱动 | udev 规则 | 驱动/权限 |
+| 实测状态 | 完整 | OpenOCD 路径在位，USB 烧录**未实测** | **未实测 / 实验性** |
+
+**Linux 烧录前**（MRS3 的 tar.xz / deb 包在 `beforeinstall/` 提供）：
+
+1. 把 `50-wch.rules`、`60-openocd.rules` 装到 `/etc/udev/rules.d/`；规则覆盖
+   `1a86:8010`、`1a86:8012`、`4348:55e0`，`GROUP="plugdev"`。
+2. `sudo udevadm control --reload-rules && sudo udevadm trigger`；当前用户加入 `plugdev`
+   （或按发行版用 `dialout`/`uucp`）。
+3. `beforeinstall/` 还带 `libhidapi-*`、`libusb-1.0`、`libjaylink`、`libmcuupdate`、
+   `libncurses.so.5.9`、`libtinfo.so.5.9`；OpenOCD 缺库时用 `LD_LIBRARY_PATH` 指向它，
+   或装系统 `libncurses5`/`libtinfo5`。
+4. 不要用 `sudo` 跑整个构建；只给 openocd 设备权限。
+5. 包根 `beforeinstall/start.sh` 会做同样的系统级准备（`cp lib* /usr/lib` + `ldconfig`、复制
+   udev 规则、设置 `chrome-sandbox` setuid），需要 sudo；不想跑脚本就按上面 1–3 手工做。
+
+**macOS**：`openocd` 可执行文件在位，但 WCH-Link 的 USB 通道与烧录流程**未实测**；交付/发布时
+标"实验性"，需真机验证。从网络下载/拷入的 `.app` 带 quarantine 属性，放入 `/Applications` 后
+首次打开要过 Gatekeeper（右键打开或在"隐私与安全性"放行）——命令行工具链不受影响。
+**WSL2**：USB 用 usbipd-win 直通；构建链路可全程在 WSL2 跑，只有
+烧录需要真机或直通。
 
 ### 地址规则（拿错会静默不烧）
 
@@ -69,31 +102,60 @@ shutdown
 
 ## WCH-Link 底层操作（读保护/chipID/存储分配等）
 
-GUI 路径：`Others\SWDTool`（WCH-LinkUtility）——读保护开关、调试器模式切换、固件升级等
-深度操作优先引导用户用它。
+GUI 路径：`Others/SWDTool`（WCH-LinkUtility）——读保护开关、调试器模式切换、固件升级等
+深度操作优先引导用户用它。**该 GUI 只在 Windows 安装里提供**；Linux/macOS 没有它，底层操作
+走下面的原生库。
 
-命令行路径（MRVC 先例）：用与 DLL **位数匹配**的 PowerShell P/Invoke `McuCompilerDll.dll`
-（取 `Others\CommunicationLib\default\` 那份；OpenOCD bin 里另有一份 32 位拷贝、匹配 32 位
-openocd.exe，不要拿它当桥）：
+**三平台同一套原生库**：wlink 底层操作的事实引擎在
+`components/WCH/Others/CommunicationLib/default/`，按平台换文件名（MRS 自己的扩展在 POSIX 上
+就是进程内 FFI 加载它们）：
 
-- **宿主位数随安装代次**：MRS2 的 CommunicationLib DLL 是 32 位 → 用
-  `%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`；MRS3 的是 64 位 → 用
-  `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`。位数不匹配加载不了 DLL；
-  稳妥做法是读 DLL 的 PE 头 Machine 字段选宿主（0x14c=32 位 / 0x8664=64 位）。
-- `Add-Type` 内联 C#：`[DllImport("McuCompilerDll.dll", CallingConvention = CallingConvention.StdCall)]`
-  声明 int 参数导出函数；操作序列与 chipID 从芯片库 `<系列>-flash.json` 的 `id` 字段来。
-- 能力开关（`support_readProtectOpts` / `support_eraseCodeFlash` / `support_memoryAssign` /
-  `support_eraseAll` …）为 false 的操作在该芯片上不可用，UI 上应禁用。
-- PS 输出按"最后一行是 JSON"提取（`ConvertTo-Json` 会把非 ASCII 转义成 `\uXXXX`，天然避开
-  代码页问题）；PS 脚本文件要带 UTF-8 BOM 写入。
-- 每次调用都要 1-3 秒 Add-Type 编译开销；这是 MRS2 同款架构的固有成本。
-- 调用约定注意：MRVC 按 StdCall 声明且工作正常，但 MRS2 用 koffi 绑定（x86 上 cdecl 常见），
-  怀疑崩溃时先用 dumpbin 核对导出符号的调用约定。
+| 平台 | 库文件 | 同目录依赖 / 附带物 |
+|---|---|---|
+| Windows | `McuCompilerDll.dll` | （MRS2 32 位 / MRS3 64 位，见下） |
+| Linux | `libmcuupdate.so` | `libhidapi-*`、`libjaylink`、`libusb-1.0`、`libncurses.so.5.9`、`libtinfo.so.5.9`；还有 `50-wch.rules` / `60-openocd.rules` |
+| macOS | `libmcuupdate.dylib` | `libhidapi*.dylib`、`libusb-1.0.0.dylib` |
+
+- **导出三平台同名**（逐符号实证：ELF `.dynsym` / PE 导出表 / dylib 符号串）：
+  `MRSFunc_*` 操作族——`QueryRProtect` / `EnableRProtect` / `DisableRProtect` /
+  `GetLinkedMCUID` / `ClearCodeFlash` / `GetMemType` / `SetMemType` / `DisableDbgInterface` /
+  `FlashOperation(Ex…)` 等——加上 `McuCompiler_SetTargetChip`。**Windows 版另有一大批
+  `McuCompiler_*` 助手（`GetChipInfo` / `EnumLink` / `SetLinkIndex` / `ReadDevMemory` /
+  `GetFlashSum` 等）POSIX 版没有**——跨平台脚本只用两边都有的导出；POSIX `.so` 还泄漏大量
+  内部符号，不要依赖。
+- 调用前置：先 `McuCompiler_SetTargetChip(chipId, dbgMode)`（dbgMode 常规 0）；随后的操作签名是
+  `(chipId, clkSpeed)`——`ClearCodeFlash` 另加 `mode`、`GetLinkedMCUID` 只要 chipId。chipID 取
+  芯片库 `<系列>-flash.json` 的 `id`；能力开关（`support_readProtectOpts` /
+  `support_eraseCodeFlash` / `support_memoryAssign` / `support_eraseAll` …）为 false 的操作
+  在该芯片上不可用，UI 上应禁用。
+- **Windows 命令行路径（MRVC 先例，实测）**：用与库**位数匹配**的 PowerShell P/Invoke
+  （取 `Others\CommunicationLib\default\` 那份；OpenOCD bin 里另有一份 32 位拷贝、匹配 32 位
+  openocd.exe，不要拿它当桥）：
+  - **宿主位数随安装代次**：MRS2 的 DLL 是 32 位 → 用
+    `%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`；MRS3 的是 64 位 → 用
+    `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`。位数不匹配加载不了 DLL；
+    稳妥做法是读 DLL 的 PE 头 Machine 字段选宿主（0x14c=32 位 / 0x8664=64 位）。
+  - `Add-Type` 内联 C#：`[DllImport("McuCompilerDll.dll", CallingConvention = CallingConvention.StdCall)]`
+    声明 int 参数导出函数；真正导出名是 `MRSFunc_*`/`McuCompiler_*`，托管名经 `EntryPoint`
+    映射，不写 EntryPoint 调用的就是根本不存在的名字。
+  - PS 输出按"最后一行是 JSON"提取（`ConvertTo-Json` 会把非 ASCII 转义成 `\uXXXX`，天然避开
+    代码页问题）；PS 脚本文件要带 UTF-8 BOM 写入。每次调用都有 1-3 秒 Add-Type 编译开销。
+  - 调用约定注意：MRVC 按 StdCall 声明且工作正常，但 MRS 用 koffi 绑定（x86 上 cdecl 常见），
+    怀疑崩溃时先用 dumpbin 核对导出符号的调用约定。
+- **Linux/macOS 命令行路径**：任何进程内 FFI 都能调（Python 用 `ctypes.CDLL`；Node 侧可直接
+  复用 MRS 自带扩展捆绑的 koffi——`extensions/mrs-team.mrs-vscode/out/koffi/`，MRS 自己的
+  扩展就是这么进程内加载的）。注意 `dlopen` **不会自动搜索同目录依赖**——先
+  `LD_LIBRARY_PATH=<...>/CommunicationLib/default`（macOS 另有 `DYLD_LIBRARY_PATH`）或显式
+  预加载依赖库再加载主库。**未经真机实测**：库、符号、加载路径都已就位，烧录/读保护的
+  实跑结果待回报，交付时标"已实现未实测"。
+- **纯工具链包（`MRS_Toolchain_*`）没有 `Others/CommunicationLib`**——Linux/mac 纯工具链
+  形态下这套底层操作不可用，只剩 OpenOCD 命令行（见上）。
 
 ## 调试（gdb + OpenOCD server）
 
-1. `openocd.exe -f wch-riscv.cfg`（gdb server 3333 / telnet 4444 / tcl 6666）
-2. `<工具链>\bin\riscv-wch-elf-gdb.exe obj\<名>.elf` → `target extended-remote localhost:3333`
+1. `openocd -f wch-riscv.cfg`（Windows `openocd.exe`；gdb server 3333 / telnet 4444 / tcl 6666）
+2. `<工具链>/bin/riscv-wch-elf-gdb obj/<名>.elf`（Windows 是 `riscv-wch-elf-gdb.exe`）→
+   `target extended-remote localhost:3333`
 3. 断点符号名：入口是 `handle_reset`（.launch 的 stopAt），`set mem inaccessible-by-default off`、
    `set architecture riscv:rv32` 是常用客户端配置（见 .launch 的 gdbClientOtherCommands）。
 4. 外设寄存器视图：芯片库 `<系列>xx.svd`。
@@ -105,6 +167,11 @@ openocd.exe，不要拿它当桥）：
 | `no flash bank found for address 0x00000000` | hex 链接在 0 而 bank 基址非零：offset 要用 `A - H` 换算（见上） |
 | 烧完校验失败/跑飞 | 双核工程用了单核 cfg；或擦除不完整（Erase All=true 才全片擦） |
 | openocd 连不上（Failed to open WCH-Link） | 驱动/占用：WCH-LinkUtility 或别的 openocd 正占用设备；拔插重试 |
+| Linux：`Permission denied` 打开 USB / `/dev/bus/usb` | 没装 `50-wch.rules`/`60-openocd.rules`，或用户不在 `plugdev`；见上「平台差异」 |
+| Linux/macOS：`openocd: error while loading shared libraries` | 缺 `libhidapi`/`libusb`/`libjaylink`/`libncurses.so.5`；用 `beforeinstall/` 的库 + `LD_LIBRARY_PATH` 或装系统包 |
+| Linux/macOS：`libmcuupdate.so/.dylib` 打不开 / undefined symbol | 底层库依赖未被搜索到：`LD_LIBRARY_PATH`（mac 另加 `DYLD_LIBRARY_PATH`）指向 `CommunicationLib/default`，或先显式加载依赖；纯工具链包没有此库 |
+| macOS：`Bad CPU type in executable` | 在 Apple Silicon 用了 x86_64 工具链（或反之）；换对应架构的包/工具链 |
+| Linux/macOS 找不到 WCH-LinkUtility | 该 GUI 只在 Windows 安装提供；POSIX 用 OpenOCD CLI（烧录通道未实测） |
 | cfg 报错 unknown command | 地址参数格式错（必须 `0x` 开头 hex）；或 wlink_set_address 放到了 init 之后 |
 | 路径含中文烧录失败 | cfg 文件按 UTF-8 写了（应 ANSI），或路径用了反斜杠（应正斜杠） |
 | 读保护后无法再连 | 先用 WCH-LinkUtility 解保护（解除会全片擦除，数据不保） |

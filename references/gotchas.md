@@ -7,8 +7,9 @@
 
 - **双编码现实**：`.project`/`.cproject`/`.launch` 声明 UTF-8，但含中文工程名的 `.template`、
   `.wvsln`、makefile 可能是 ANSI/GBK。读文件：先 UTF-8 试解码，失败回退 GBK（`cp936`）。
-  写 `.template`/cfg/makefile：一律系统 ANSI（`locale.getpreferredencoding(False)`，zh-CN 即
-  GBK/`mbcs`）。UTF-8 写入中文路径的 cfg 会让 OpenOCD 的 Jim Tcl 打不开文件。
+  写 `.template`/cfg/makefile：Windows 一律系统 ANSI（`locale.getpreferredencoding(False)`，
+  zh-CN 即 GBK/`mbcs`）；Linux/macOS 没有 ANSI 代码页，**按文件原编码写回**（新建 cfg 用
+  UTF-8）。UTF-8 写入 Windows 上中文路径的 cfg 会让 OpenOCD 的 Jim Tcl 打不开文件。
 - XML 转义：写回 `.cproject`/`.project` 时 `&`→`&amp;`（先做）、`<`→`&lt;`、属性内 `"`→`&quot;`。
   列表值里的宏形如 `&quot;${workspace_loc:...}&quot;`——**路径类**字段（include 路径、库搜索
   路径、链接脚本）取值剥引号、写回补引号；但 `libraries` / `defined_symbols` 进 MRS2 模型是
@@ -31,6 +32,11 @@
 - include 目录不存在会被**静默丢弃**（MRS 同款）：-I 列表比 .cproject 短一条不一定是 bug。
 - `PARENT-N-PROJECT_LOC` 链接（EVT 共享 PUB 目录的方式）在发布包里常残留打包机器的绝对路径。
   修复：从工程目录逐级向上找第一个包含尾段的祖先目录，改写为 `PARENT-N-PROJECT_LOC/尾段`。
+- **EVT 例程与同级 `SRC/` 配套**：`EXAM/<例程>` 的 `.project` 用
+  `PARENT-1-PROJECT_LOC/SRC/...` 链接同级 `EXAM/SRC/`（`Ld` / `RVMSIS` / `Startup` /
+  `StdPeriphDriver`；`CH58x_common.h` 就在 `SRC/StdPeriphDriver/inc/`）。**单独拷走例程目录 =
+  链接全部失效**，编译报缺 `CH58x_common.h` 等头文件——拷贝/移动例程必须连同同级 `SRC/`
+  一起（保持 `<例程>/ + SRC/` 布局），或按上面规则改写链接。
 - 符号链接/junction 循环：递归扫描源文件或工程发现时带深度上限或已访问集合，否则自指
   junction 会栈溢出。
 - Windows 保留设备名（`CON`/`NUL`/`COM1`/`LPT1`…）与尾部点/空格的目录名会让 mkdir 产生
@@ -94,6 +100,39 @@
 - flash.json 的 `support_*` 能力开关为 false 时，对应操作（如 debugInterfaceMode）在该芯片
   不可用，不要盲目下发。
 
+## 跨平台（Linux / macOS）
+
+- **MRS2 在非 Windows 只有纯工具链包**：`MRS_Toolchain_*` 顶层只有 `Toolchain/` + `OpenOCD/`，
+  没有 IDE、没有 `SDK/default`、没有自带 make。别在 Linux/mac 找 `MounRiver Studio 2.exe`
+  或模板 zip；完整 IDE 与芯片库只有 **MRS3**（Linux tar.xz/.deb、macOS arm64 `.app`）。
+- **别按文件名判包**：`MRS_Toolchain_Linux_X64_V300.tar.xz` 实际是 MRS3 完整 IDE；
+  `..._V240.tar.xz` 才是纯工具链。看解包内容有没有 `resources/app`。
+- **在 Windows 上解包 Linux/mac 包会丢符号链接**（tar/zip 权限），GCC 插件 `.so` 缺链接后
+  工具链不可用；应在目标平台解包，或用保留符号链接的工具（WSL2 的 tar、7-Zip 需注意）。
+- **架构**：macOS MRS3 IDE 是 **arm64 专用**；V2.4 mac 工具链包是**混合架构**（GCC8 与 ARM =
+  x86_64，GCC12/15 = arm64）。Intel Mac 只能用 V2.4 纯工具链包的 GCC8/ARM（MRS3 IDE 跑不了）；
+  Apple Silicon 优先 MRS3 arm64 IDE。症状：`Bad CPU type in executable`（mac）、
+  `Exec format error`（Linux 拷错包）。
+- **可执行位**：从 zip/Windows 拷贝会丢 `+x`；gcc/make/openocd 报 `Permission denied` 时
+  `chmod +x`。工具链清单里是裸名，POSIX 不要补 `.exe`。
+- **PATH 与大小写**：PATH 分隔符 `:`（Windows `;`）；Linux/mac 文件系统区分大小写，
+  `.cproject` 的 `excluding` token、`#include`、链接资源名必须与磁盘大小写一致
+  （Windows 上做大小写折叠比较，POSIX 不能照搬）。
+- **Windows 绝对路径**：`.cproject`/`.template`/`.launch` 里的 `C:\...`、反斜杠在 POSIX
+  不会解析；改成 `${workspace_loc}`、相对路径或 POSIX 绝对路径。`.wvsln` 成员行同理。
+- **编码**：POSIX 没有 ANSI 代码页；从 Windows 拷来的 GBK `.template`/`.wvsln`/makefile 仍按
+  GBK 读（先 UTF-8 试解码、失败回退），写回按原编码；新建文件用 UTF-8。不要用 locale
+  编码覆写 GBK 文件。
+- **GUI 工具缺席**：WCH-LinkUtility / WCHISPTool / WCHTouchKeyTool / WCHGUIDesigner /
+  WCHToolKit / HexBinStudio / COMTransmit 只在 Windows 安装里；Linux/mac 按组件缺失降级，
+  不要拼不存在的 `.exe` 路径。
+- **纯工具链包无 make/SDK**：构建用系统 GNU make；`chips` 不可用；新建工程模板要用 IDE 的
+  `SDK/default`（或 Windows 安装）。
+- **烧录**：Linux 需 udev 规则（`50-wch.rules` / `60-openocd.rules`，`plugdev`）；macOS 未实测；
+  wlink 底层库三平台同名（`libmcuupdate.so`/`.dylib` vs Windows `McuCompilerDll.dll`），
+  POSIX 走进程内 FFI 但**未经真机实测**。详见 flash-debug.md「平台差异」与「WCH-Link 底层操作」。
+- **WSL2**：构建链路可全程在 WSL2 跑；USB 烧录用 usbipd-win 直通 WCH-Link。
+
 ## 已知失败模式（现象速查）
 
 | 现象 | 第一排查点 |
@@ -105,3 +144,9 @@
 | 中文日志乱码 | 控制台按 GBK 解码了 UTF-8 输出（或反之）；工具链输出按 ANSI 处理 |
 | 正规 Windows 路径被构建拒绝 | 分层判定错位：工程根 `( ) ; % # & !` 本身合法；真正拒绝的只有链接路径的 `;` `#`、USER_OBJS 的 `& ( ) ' [ ] ; #`、一切反引号（build.md 实测矩阵） |
 | `C:` 盘符路径跑到别处 | `path.resolve("C:")` 解析到该盘当前目录；盘符根必须写成 `C:\` |
+| Linux/mac 找不到 MRS2 IDE / `SDK/default` | 非 Windows 的 MRS2 代官方包是纯工具链（无 IDE/无 SDK/无 make）；完整 IDE 用 MRS3 |
+| `Bad CPU type in executable` / `Exec format error` | 架构不符：Intel Mac 装 arm64 MRS3、V2.4 mac 包的 GCC12/15 是 arm64、或 Linux 包拷到 mac；见 install-layout.md「架构门禁」 |
+| `Permission denied` 执行 gcc/make/openocd | 拷贝丢了可执行位；`chmod +x` |
+| POSIX 下 `Permission denied` 访问 WCH-Link USB | udev 规则未装或用户不在 `plugdev`；见 flash-debug.md「平台差异」 |
+| 改 `.cproject` 后在 Linux/mac 编译丢文件 | POSIX 区分大小写，`excluding`/`#include` 大小写与磁盘不一致（Windows 折叠比较掩盖了问题） |
+| EVT 例程编译报缺 `CH58x_common.h` 等头 | 例程被单独拷出、脱离了同级 `EXAM/SRC/`（`PARENT-1-PROJECT_LOC/SRC/...` 链接断）；连同 `SRC/` 一起拷或改写链接 |

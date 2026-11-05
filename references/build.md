@@ -5,21 +5,23 @@
 MounRiver/CDT 的 managed build（MRS2/MRS3 同机制）：**首次构建时**根据 `.cproject` 在构建目录
 （配置名，即 `obj/`）生成 CDT 风格 makefile（`makefile` / `sources.mk` / `objects.mk` /
 `<子目录>/subdir.mk`），之后执行 `make -jN all`（make 用安装目录自带的
-`others\Build_Tools\Make\bin\make.exe`）。所以：
+`others/Build_Tools/Make/bin/make`；Windows 是 `make.exe`，纯工具链包没有自带 make，用系统
+PATH 里的 GNU make）。所以：
 
 - obj/ 里出现 makefile 是正常产物；手工改它们会在下次重新生成时被覆盖。
 - 配置改变后 IDE 会重新生成 makefile——命令行复现构建时要么照抄生成规则，要么绕开 makefile
   直接调工具链（见下"直接编译配方"）。
 - **优先复用已有 makefile**：工程构建过一次后（MRS2/MRS3/MRVC 构建过），obj/ 里有完整 makefile 集合，
   增量/全量构建直接 `make -C obj -jN all`（make 用
-  `$MRS\resources\app\resources\win32\others\Build_Tools\Make\bin\make.exe`），不必重新推导 flags。
-  只有从未构建过、或刚改过 `.cproject` 时才需要手动组装命令。
+  `$MRS/resources/app/resources/<平台层>/others/Build_Tools/Make/bin/make`；Windows `make.exe`），
+  不必重新推导 flags。只有从未构建过、或刚改过 `.cproject` 时才需要手动组装命令。
 - **代次风格行为（MRS 2.3.0+ / MRS3）**：`objects.mk` 的 `LIBS` 会在配置列表后**自动追加 `-lm`**
   （配置里没写 m 也加；缺了它，--whole-archive 进来的归档调 fabs/sqrt 会 undefined reference）；
   **WCH 助手库（`-lIQmath_RV32` / `-lprintf` / `-lprintfloat`）不在 LIBS**，而是接在链接 recipe
   的 `$(LIBS)` 之后。旧代次（MRS2 1.8.5–2.2.18）无此注入、助手库在 objects.mk——逐字节复现或
   比对 makefile 时按目标代次对齐（MRS3 与 2.3+/2.5 同风格）。
-- makefile 里的路径按**系统 ANSI 代码页**写盘（zh-CN = GBK）；配方里的字面 `$` 必须写成 `$$`
+- MRS 生成的 makefile：Windows 按**系统 ANSI 代码页**写盘（zh-CN = GBK），Linux/macOS 没有
+  ANSI 代码页（通常为 UTF-8）；配方里的字面 `$` 必须写成 `$$`
   （make 先展开 `$` 序列再交给 shell；但 make 自动变量 `$@ $< $^ $* $?` 与用户写的 `$(VAR)`
   不得转义——`-Wa,-adhlns="$@.lst"` 被写成 `$$@` 后 shell 看到空值，清单静默失效）。
   路径字符能否编译要分层判定（make 规则词 / 引号参数 / 无引号展开三层），实测矩阵见下节。
@@ -49,7 +51,7 @@ cmd 语义。
 | 工程根（无链接目录工程） | 上述全部，另加 `;` `#` | 反引号 |
 | Other Objects（USER_OBJS） | — | `;` `#` 反引号 `& ( ) '` `[ ]` |
 | 库名（LIBS） | 仅 `A-Za-z0-9._+-` | 其余全部 |
-| 源文件名 | — | `( ) ; #` 反引号（EVT 全系无此命名，不在支持范围） |
+| 源文件名（Windows 矩阵） | — | `( ) ; #` 反引号（EVT 全系无此命名，不在支持范围；POSIX 上 `( )` 合法） |
 
 原理：工程根字符只出现在**相对 prereq** 和**引号包裹的绝对旗标参数**（`-I"path"`/`-T"path"`）
 里，永远不进规则词——所以 `(` `)` `;` `#` 都能活（EVT 发布目录带括号如
@@ -64,6 +66,26 @@ cmd 语义。
 `setlocal DisableDelayedExpansion` 兜底；.cmd 文件按系统 ANSI 码页解析（含中文用户名的机器，
 `%TEMP%` 记录文件路径非 ASCII）。构建日志看不出实际命令行时用 `make -n -B all` 干跑——
 MRS2/MRVC 的 recipe 带 `@` 静默，干跑打印全部实际命令（链接/objcopy/size 全覆盖）。
+
+## Linux / macOS 构建（POSIX）
+
+- **环境**：PATH 分隔符是 `:`（`<工具链>/bin:<res>/others/Build_Tools/Make/bin:$PATH`）；
+  IDE 自带 make，纯工具链包用系统 GNU make（`make --version` 确认不是 BSD make）。工具链/
+  openocd/make 都是裸名，无 `.exe`；从 zip 或 Windows 拷贝后先 `chmod +x`。
+- **recipe 仍由 sh 执行**（GNU make 默认 `/bin/sh`），make 规则词限制与反引号命令替换仍然成立；
+  但 **cmd.exe 包装层的三个坑在 POSIX 不存在**（`%`→`%%`、`!` 延迟展开、ANSI 码页写记录）。
+- **路径字符**：上面的逐字符矩阵是 Windows make bundle 实测。POSIX 上跨平台成立的硬限制是
+  `;` `#` 在规则词中不可表达、反引号在双引号内仍做命令替换；`( ) & '` 只在 sh 无引号展开时
+  有风险（POSIX 文件名允许这些字符，写进无引号 recipe 仍要引用/转义）；盘符/反斜杠结论不适用。
+  带空格/括号的路径用引号包住即可，不要照搬 Windows 的"括号必败"结论。
+- **实时日志包装**（需要时）：单 bash 脚本，`make 2>&1 | tee log`，退出码取 `${PIPESTATUS[0]}`；
+  干跑 `make -n -B all >> log` 只进记录；脚本开头 `mkdir -p` 自建日志目录（对临时目录清理免疫）。
+  `set -o pipefail` 也可，但 `PIPESTATUS` 能精确保留 make 的退出码。
+- **跨平台拷来的工程**：`.cproject` / `.template` / `.launch` 里的 `C:\...`、反斜杠路径在
+  POSIX 不会解析；先改成 `${workspace_loc}`、相对路径或 POSIX 绝对路径。makefile 的 CRLF
+  通常无害，但 recipe 里的 `\r` 会被 shell 当成参数尾字符（`command not found` 带怪后缀），
+  必要时转 LF。
+- 直接配方里的 `\` 路径分隔符与 `.exe` 后缀在 POSIX 换成 `/` 与裸名（gcc/gdb/objcopy 同）。
 
 ## 直接编译配方（与 MRS2/MRS3 等价的命令行）
 
@@ -150,5 +172,12 @@ obj/<名>.bin`、`objdump -d -C -x <elf> > obj/<名>.lst`、`size <elf>`（Berke
 | `No rule to make target` | 链接工程根/链接目录含 `;` `#`（绝对 prereq 进规则词，MRS2 同败且把 `#` 误写成 `%`）；或源文件名含 `(` `)` `;` `#` 或空格（规则词层无法表达）。工程根本身含 `( ) ; % #` 不是原因 |
 | 链接 undefined reference 到外设函数 | 该外设 .c 被 StdPeriphDriver entry 的 excluding 裁掉了（CH58x 常见，属预期裁剪） |
 | include 找不到 | `${workspace_loc:/其他工程/...}` 指错根；或 include 目录不存在被静默丢弃 |
-| 中文路径乱码/打不开文件 | 构建脚本按错误编码写盘（应 ANSI/GBK）；OpenOCD cfg 里应正斜杠 |
+| `fatal error: CH58x_common.h: No such file` | EVT 例程被单独拷出、脱离同级 `EXAM/SRC/`（`.project` 的 `PARENT-1-PROJECT_LOC/SRC/...` 链接断）；连同 `SRC/` 一起拷或改写链接 |
+| 中文路径乱码/打不开文件 | 构建脚本按错误编码写盘（Windows 应 ANSI/GBK，POSIX 应原编码/UTF-8）；OpenOCD cfg 里应正斜杠 |
 | makefile 里 `$@` 变成 `$$@` | 把 make 自动变量也做了 `$`→`$$` 转义（只应转义用户路径里的 $） |
+| `make: command not found` / 找不到 make | 纯工具链包（`MRS_Toolchain_*`）没有自带 make；安装系统 GNU make 并加入 PATH |
+| `Permission denied` 执行 gcc/make/openocd | 从 zip/Windows 拷贝丢了可执行位；`chmod +x` |
+| `Bad CPU type in executable` / `Exec format error` | 架构不符：Intel Mac 装 arm64 MRS3、用 V2.4 mac 包的 GCC12/15（arm64）、或把 Linux 包拷到 mac；按 install-layout.md「架构门禁」换包/换工具链 |
+| `libncurses.so.5` / `libtinfo.so.5` 找不到 | Linux MRS3 的 `beforeinstall/` 带 `libncurses.so.5.9`/`libtinfo.so.5.9`；装系统 libncurses5/libtinfo5，或 `LD_LIBRARY_PATH` 指向 beforeinstall |
+| POSIX 下 `riscv-wch-elf-gcc: command not found` | PATH 没加 `<工具链>/bin`，或文件没有执行位；POSIX 用裸名，不要补 `.exe` |
+| `$'\r': command not found` | Windows 换行进了 recipe；把 makefile 转成 LF |

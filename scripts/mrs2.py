@@ -5,14 +5,17 @@
 子命令:
   find      递归发现工程 (.wvproj/.project) 与 solution (.wvsln)
   show      解析一个工程的全部配置并输出摘要（含路径字符可构建性警告）
-  toolchain 列出安装目录里的工具链 (Toolchain\\sub_manifest.json)
+  toolchain 列出安装目录里的工具链 (Toolchain/sub_manifest.json)
   chips     扫描芯片库 (SDK/default) 的系列/型号/下载地址/能力
   sln       解析 .wvsln solution 文件
 
-环境: Windows + MounRiver Studio 2 或 3 的安装目录（两代目录结构同构）。路径来源按优先级：
---mrs2 <安装根> → 环境变量 MRS2_HOME / MRS3_HOME → WCH 官方默认安装位置
-C:\\MounRiver\\MounRiver_Studio2 / MounRiver_Studio3（MRS2 在前，仅兜底）。
-都不存在时报错并提示"需已安装 MRS2 或 MRS3、请提供安装路径"。
+环境: Windows / Linux / macOS。MRS2 与 MRS3 的 IDE 目录同构；非 Windows 的 MRS2 代官方包
+是纯工具链（MRS_Toolchain_*，顶层 Toolchain/ + OpenOCD/，无 IDE、无 SDK、无自带 make），
+完整 IDE 只有 MRS3。路径来源按优先级：
+--mrs2 <安装根或工具链根> → 环境变量 MRS2_HOME / MRS3_HOME → 本机惯例位置
+(Windows C:\\MounRiver\\MounRiver_Studio2 / MounRiver_Studio3；Linux
+/usr/share/MRS3/MRS-linux-x64；macOS /Applications/MounRiver Studio 3.app)。
+都不存在时报错并提示"需已安装 MRS2/MRS3 或解包工具链包、请提供路径"。
 Python 3.8+，仅标准库。工具链/OpenOCD 均来自定位到的安装目录。
 """
 import argparse
@@ -55,7 +58,9 @@ def read_text(p):
 
 
 def write_ansi(p, s):
-    """写 MRS2 域文件（.template/cfg/makefile）：系统 ANSI 代码页。"""
+    """写 MRS2 域文件（.template/cfg/makefile）：Windows 用系统 ANSI 代码页（zh-CN=GBK）；
+    Linux/macOS 没有 ANSI 代码页，用 locale 编码（通常 UTF-8）。跨平台拷来的 GBK 文件
+    不要用它覆写——先按 read_text 的探测结果选编码。"""
     os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
     with open(p, 'w', encoding=ANSI, newline='') as f:
         f.write(s)
@@ -63,31 +68,87 @@ def write_ansi(p, s):
 
 # ---------------------------------------------------------------- install
 
+IS_WIN = os.name == 'nt'
+EXE = '.exe' if IS_WIN else ''
+LAYERS = ('win32', 'linux', 'darwin')
+
+
+def host_platform():
+    """本机平台（与 MRS 的平台层目录同名）。"""
+    if sys.platform.startswith('win'):
+        return 'win32'
+    if sys.platform == 'darwin':
+        return 'darwin'
+    return 'linux'
+
+
+def conventional_installs():
+    """本机平台的惯例安装位置（纯工具链包没有惯例位置，只能显式提供/环境变量）。"""
+    host = host_platform()
+    if host == 'win32':
+        return [r'C:\MounRiver\MounRiver_Studio2', r'C:\MounRiver\MounRiver_Studio3']
+    if host == 'darwin':
+        return ['/Applications/MounRiver Studio 3.app']
+    return ['/usr/share/MRS3/MRS-linux-x64']
+
+
 class Mrs2Install:
-    def __init__(self, root, win32, flavor='unknown', label='MounRiver Studio'):
-        self.root = root                       # 安装根（由用户提供的路径）
-        self.win32 = win32
+    """一个 IDE 安装或纯工具链根。
+
+    IDE：root 是安装根；res 是 <root>/resources/app/resources/<layer>；
+    macOS 的 root 可以是 .app 本身（res 在 Contents/Resources/app/resources/darwin）。
+    纯工具链：root = res = 解包根（顶层 Toolchain/ + OpenOCD/，无 SDK/无 make）。
+    """
+
+    def __init__(self, root, res, flavor='unknown', label='MounRiver Studio',
+                 layer='', kind='ide', app_dir=None):
+        self.root = root                       # IDE 安装根 / 纯工具链根
+        self.res = res                         # 平台资源层目录（IDE）或工具链根
+        self.layer = layer                     # win32 / linux / darwin；纯工具链为空
+        self.kind = kind                       # ide / toolchain
         self.flavor = flavor                   # mrs2 / mrs3 / unknown
         self.label = label                     # 品牌全名（product.json 的 nameShort）
-        wc = os.path.join(win32, 'components', 'WCH')
-        self.toolchain_dir = os.path.join(wc, 'Toolchain')
-        self.openocd_bin = os.path.join(wc, 'OpenOCD', 'OpenOCD', 'bin')
-        self.sdk_dir = os.path.join(wc, 'SDK', 'default')
-        self.wch_others = os.path.join(wc, 'Others')
-        self.make_bin = os.path.join(win32, 'others', 'Build_Tools', 'Make', 'bin')
+        self.app_dir = app_dir or os.path.join(root, 'resources', 'app')
+        if kind == 'toolchain':
+            self.toolchain_dir = os.path.join(root, 'Toolchain')
+            self.openocd_bin = os.path.join(root, 'OpenOCD', 'OpenOCD', 'bin')
+            self.sdk_dir = ''
+            self.wch_others = ''
+            self.make_bin = ''
+        else:
+            wc = os.path.join(res, 'components', 'WCH')
+            self.toolchain_dir = os.path.join(wc, 'Toolchain')
+            self.openocd_bin = os.path.join(wc, 'OpenOCD', 'OpenOCD', 'bin')
+            self.sdk_dir = os.path.join(wc, 'SDK', 'default')
+            self.wch_others = os.path.join(wc, 'Others')
+            self.make_bin = os.path.join(res, 'others', 'Build_Tools', 'Make', 'bin')
+
+    @property
+    def win32(self):
+        """兼容旧输出：资源层目录（不再限定 win32）。"""
+        return self.res
 
     def __str__(self):
-        return self.win32
+        return self.res
 
 
-def detect_flavor(root):
+def detect_flavor(root, app_dir=None):
     """代次判定。MRS2/MRS3 目录同构，唯一区分点是品牌文件：product.json 的 mrsVersion
-    主号（2/3）权威；nameShort/applicationName 品牌串与安装根启动器 exe 名兜底
-    （逻辑与 MRVC toolchain.ts detectFlavor 一致）。"""
+    主号（2/3）权威；nameShort/applicationName 品牌串与安装根启动器名兜底
+    （逻辑与 MRVC toolchain.ts detectFlavor 一致）。macOS 的启动器是 Electron 存根，
+    不携带代次，只能靠 product.json。"""
     label = ''
-    try:
-        pj = os.path.join(root, 'resources', 'app', 'product.json')
-        if os.path.isfile(pj):
+    candidates = []
+    if app_dir:
+        candidates.append(os.path.join(app_dir, 'product.json'))
+    candidates += [
+        os.path.join(root, 'resources', 'app', 'product.json'),
+        os.path.join(root, 'Contents', 'Resources', 'app', 'product.json'),
+    ]
+    for pj in candidates:
+        if not os.path.isfile(pj):
+            continue
+        try:
             j = json.loads(read_text(pj))
             label = (j.get('nameShort') or '').strip()
             major = (j.get('mrsVersion') or '').strip().split('.', 1)[0]
@@ -98,51 +159,85 @@ def detect_flavor(root):
                 return 'mrs3', label or 'MounRiver Studio 3'
             if re.search(r'studio\s*2|studio-2', branding):
                 return 'mrs2', label or 'MounRiver Studio 2'
-    except Exception:
-        pass                                   # 坏 product.json → 走启动器兜底
+        except Exception:
+            pass                               # 坏 product.json → 走启动器兜底
     try:
         names = {f.lower() for f in os.listdir(root)}
     except OSError:
         names = set()
-    if 'mounriver studio 3.exe' in names:
+    if 'mounriver studio 3.exe' in names or 'mounriver-studio 3' in names:
         return 'mrs3', label or 'MounRiver Studio 3'
-    if 'mounriver studio 2.exe' in names:
+    if 'mounriver studio 2.exe' in names or 'mounriver-studio 2' in names:
         return 'mrs2', label or 'MounRiver Studio 2'
     return 'unknown', label or 'MounRiver Studio'
 
 
-def find_install(explicit=None):
-    """定位 MounRiver 安装目录，按优先级：显式路径 → 环境变量 → WCH 官方默认安装位置。
+def locate_layout(path):
+    """从一个路径认出 IDE / 纯工具链布局（允许用户指到深层目录）。
 
-    --mrs2 参数优先；其次 MRS2_HOME / MRS3_HOME；最后兜底探测 WCH 安装器的默认位置
-    C:\\MounRiver\\MounRiver_Studio2、C:\\MounRiver\\MounRiver_Studio3（MRS2 在前——
-    只有显式提供才切到别的目录/代次）。全都没有时报错并提示"需已安装 MRS2 或 MRS3、
-    请提供安装路径"，不枚举其他目录。"""
+    返回 (kind, root, res, layer, app_dir) 或 None：
+      kind='ide'       root=安装根；res=.../resources/app/resources/<layer>
+      kind='toolchain' root=res=解包根（Toolchain/sub_manifest.json + OpenOCD/）
+    识别时对给定路径及最多 8 级祖先逐个试探，因此 win32/linux/darwin 层、
+    macOS 的 .app 或 Contents、以及纯工具链根都能直接接受。
+    """
+    p = os.path.abspath(os.path.expanduser(path))
+    if (os.path.isfile(os.path.join(p, 'Toolchain', 'sub_manifest.json'))
+            and os.path.isdir(os.path.join(p, 'OpenOCD'))):
+        return 'toolchain', p, p, '', p
+    cur = p
+    for _ in range(9):
+        # macOS 先判：直接给 .app，或给 .app/Contents。必须排在通用层探测之前——
+        # 大小写不敏感的文件系统上 Contents/resources/app 会被当成通用 resources/app 树。
+        for base, root in ((os.path.join(cur, 'Contents', 'Resources', 'app'), cur),
+                           (os.path.join(cur, 'Resources', 'app'), os.path.dirname(cur))):
+            res = os.path.join(base, 'resources', 'darwin')
+            if os.path.isfile(os.path.join(res, 'components', 'WCH', 'manifest.json')):
+                return 'ide', root, res, 'darwin', base
+        for layer in LAYERS:
+            res = os.path.join(cur, 'resources', 'app', 'resources', layer)
+            if os.path.isfile(os.path.join(res, 'components', 'WCH', 'manifest.json')):
+                return 'ide', cur, res, layer, os.path.join(cur, 'resources', 'app')
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return None
+
+
+def find_install(explicit=None):
+    """定位 MounRiver IDE 安装或纯工具链根，按优先级：
+    显式路径 → 环境变量 → 本机平台的惯例位置（Windows 仅兜底 MRS2/MRS3 两个默认目录；
+    Linux 认 .deb 的 /usr/share/MRS3/MRS-linux-x64；macOS 认 /Applications/...app）。
+    纯工具链包没有惯例位置，必须显式提供或设环境变量。全都没有时报错并提示
+    "需已安装 MRS2/MRS3 或解包工具链包、请提供路径"，不枚举其他目录。"""
     cands = []
     if explicit:
         cands.append(explicit)
     for var in ('MRS2_HOME', 'MRS3_HOME'):
         if os.environ.get(var):
             cands.append(os.environ[var])
-    # 兜底：WCH 安装器的默认安装位置（通用约定；显式提供优先）
-    cands += [r'C:\MounRiver\MounRiver_Studio2', r'C:\MounRiver\MounRiver_Studio3']
-    marker_rel = os.path.join('resources', 'app', 'resources', 'win32', 'components', 'WCH', 'manifest.json')
+    defaults = conventional_installs()
+    cands += defaults
     for c in cands:
-        c = c.strip().strip('"')
-        if os.path.isfile(os.path.join(c, *marker_rel.split(os.sep))):
-            return Mrs2Install(c, os.path.join(c, 'resources', 'app', 'resources', 'win32'),
-                               *detect_flavor(c))
-        # 允许直接填到 .../win32 这一层（win32 → resources → app → 安装根：4 跳）
-        if os.path.isfile(os.path.join(c, 'components', 'WCH', 'manifest.json')):
-            root = c
-            for _ in range(4):
-                root = os.path.dirname(root)
-            return Mrs2Install(root, c, *detect_flavor(root))
+        c = os.path.expanduser(c.strip().strip('"'))
+        loc = locate_layout(c)
+        if not loc:
+            continue
+        kind, root, res, layer, app_dir = loc
+        if kind == 'toolchain':
+            return Mrs2Install(root, res, 'mrs2', 'MRS Toolchain (standalone)',
+                               layer='', kind='toolchain')
+        flavor, label = detect_flavor(root, app_dir=app_dir)
+        return Mrs2Install(root, res, flavor, label, layer=layer, kind='ide', app_dir=app_dir)
     raise SystemExit(
-        '[mrs2] 未找到有效的 MounRiver Studio 安装：请先确认已安装 MRS2 或 MRS3，'
-        '然后用 --mrs2 <安装根> 指定安装路径（或设置环境变量 MRS2_HOME / MRS3_HOME）。\n'
+        '[mrs2] 未找到有效的 MounRiver Studio 安装或工具链包：请先确认已安装 MRS2/MRS3，'
+        '或解包 MRS_Toolchain_*；然后用 --mrs2 <安装根/工具链根> 指定'
+        '（或设置环境变量 MRS2_HOME / MRS3_HOME）。\n'
         '       已检查: %s\n'
-        '       判定标志: <安装根>\\resources\\app\\resources\\win32\\components\\WCH\\manifest.json 存在。'
+        '       IDE 判定标志: <根>/resources/app/resources/<win32|linux|darwin>/'
+        'components/WCH/manifest.json（macOS 在 .app/Contents/Resources/...）。\n'
+        '       纯工具链判定标志: <根>/Toolchain/sub_manifest.json + <根>/OpenOCD/。'
         % '；'.join(cands))
 
 
@@ -733,8 +828,10 @@ def linker_flags(proj, tc_name, side=None):
 # ---------------------------------------------------------------- 芯片库
 
 def scan_chipdb(inst):
-    db = {'available': os.path.isdir(inst.sdk_dir), 'series': []}
+    db = {'available': bool(inst.sdk_dir) and os.path.isdir(inst.sdk_dir), 'series': []}
     if not db['available']:
+        db['reason'] = ('纯工具链包不含 SDK/芯片库（顶层只有 Toolchain/ + OpenOCD/）；'
+                        '请指向完整 IDE 安装（Linux/macOS 用 MRS3，Windows 用 MRS2/MRS3）')
         return db
     for arch in sorted(os.listdir(inst.sdk_dir)):
         archp = os.path.join(inst.sdk_dir, arch)
@@ -814,8 +911,10 @@ def cmd_find(args):
 
 
 # ---- 路径字符实测矩阵（references/build.md「路径字符与 recipe 执行 shell」，逐字符实测定版）
-# recipe 经 MRS2 make bundle 的 sh 执行（PATH 上有 sh.exe 时），判定 = make 规则词 + sh 展开
-# 两层。此处只给警告，不做拒绝——工程仍可解析、可手工组装命令编译。
+# 矩阵来自 Windows make bundle 的 sh 执行（PATH 上有 sh.exe 时）；判定 = make 规则词 + sh 展开
+# 两层。POSIX 上 GNU make/sh 的同两层限制仍成立（; # 反引号等），但括号/盘符等 Windows 专属
+# 结论不照搬：源文件名里的 ( ) 在 POSIX 合法，故只在 Windows 告警。
+# 此处只给警告，不做拒绝——工程仍可解析、可手工组装命令编译。
 def path_char_warnings(root, linked, sources, user_objs, libs):
     ws = []
     if '`' in root:
@@ -835,9 +934,11 @@ def path_char_warnings(root, linked, sources, user_objs, libs):
     bad_libs = [l for l in libs if not re.fullmatch(r'[A-Za-z0-9._+-]+', l)]
     if bad_libs:
         ws.append('库名仅允许字母/数字/._+- (其余字符会在链接 sh 中执行命令): %s' % ', '.join(bad_libs))
-    bad_srcs = [s for s in sources if re.search(r"[();#`]", os.path.basename(s))]
+    src_bad = r"[();#`]" if IS_WIN else r"[;#`]"
+    bad_srcs = [s for s in sources if re.search(src_bad, os.path.basename(s))]
     if bad_srcs:
-        ws.append('源文件名含 ( ) ; # 反引号不在支持范围: %s' % ', '.join(bad_srcs[:3]))
+        ws.append('源文件名含 %s不在支持范围: %s'
+                  % ('( ) ; # 反引号' if IS_WIN else '; # 反引号', ', '.join(bad_srcs[:3])))
     return ws
 
 
@@ -961,19 +1062,39 @@ def cmd_show(args):
             print('  %s' % x)
 
 
+def _tool_exists(p):
+    """工具二进制存在性：Windows 认 .exe，POSIX 认裸名；分析另一平台解包树时两者都认。"""
+    return os.path.isfile(p) or os.path.isfile(p + '.exe')
+
+
+def _first_existing(base, names):
+    """按候选名返回第一个真实存在的路径（用于展示 make/openocd 的实际拼写）。"""
+    for n in names:
+        p = os.path.join(base, n)
+        if os.path.isfile(p):
+            return p
+    return os.path.join(base, names[0])
+
+
 def cmd_toolchain(args):
     inst = find_install(args.mrs2)
     tcs = load_toolchains(inst)
     if args.json:
-        print(json.dumps({'install': inst.win32, 'flavor': inst.flavor, 'label': inst.label,
+        print(json.dumps({'install': inst.root, 'root': inst.root, 'res': inst.res,
+                          'layer': inst.layer, 'kind': inst.kind,
+                          'flavor': inst.flavor, 'label': inst.label,
                           'toolchains': tcs}, ensure_ascii=False, indent=2))
         return
-    print('安装: %s  [%s]' % (inst.win32, inst.label))
+    kind = '，纯工具链包' if inst.kind == 'toolchain' else ''
+    print('安装: %s  [%s%s]' % (inst.root, inst.label, kind))
     for t in tcs:
-        ok = os.path.isfile(os.path.join(t['dir'], 'bin', t['gcc'] + '.exe'))
+        ok = _tool_exists(os.path.join(t['dir'], 'bin', t['gcc']))
         print('  %-6s %-8s %-22s %s  [%s]' % (t['name'], t['type'], t['prefix'], t['dir'],
                                               '可用' if ok else '缺失'))
-    print('make:  %s' % os.path.join(inst.make_bin, 'make.exe'))
+    if inst.make_bin:
+        print('make:  %s' % _first_existing(inst.make_bin, ['make.exe', 'make']))
+    else:
+        print('make:  (纯工具链包无自带 make，使用系统 PATH 中的 make)')
 
 
 def cmd_chips(args):
@@ -983,6 +1104,9 @@ def cmd_chips(args):
         db['series'] = [s for s in db['series'] if args.series.lower() in s['series'].lower()]
     if args.json:
         print(json.dumps(db, ensure_ascii=False, indent=2))
+        return
+    if not db['available']:
+        print('芯片库: 不可用 — %s' % db.get('reason', '未找到 SDK/default'))
         return
     for s in db['series']:
         print('%-7s %-12s type=%-16s 地址=%-12s chipID=%-4s 型号=%d' % (
@@ -1040,15 +1164,18 @@ def cmd_sln(args):
 
 def main():
     ap = argparse.ArgumentParser(prog='mrs2.py', description='MounRiver Studio 2/3 (MRS2/MRS3) 工程命令行工具（无需 IDE）')
-    ap.add_argument('--mrs2', help='MounRiver 安装根目录（MRS2/MRS3 通用，自动识别代次）。'
-                                   '优先本参数或环境变量 MRS2_HOME / MRS3_HOME；未提供时兜底'
-                                   '探测 WCH 默认安装位置 C:\\MounRiver\\MounRiver_Studio2 / '
-                                   'MounRiver_Studio3')
+    ap.add_argument('--mrs2', help='MounRiver 安装根或纯工具链根（MRS2/MRS3 通用，自动识别'
+                                   '代次/布局）。优先本参数或环境变量 MRS2_HOME / MRS3_HOME；'
+                                   '未提供时按本机平台惯例位置探测（Windows '
+                                   'C:\\MounRiver\\MounRiver_Studio2 / MounRiver_Studio3；'
+                                   'Linux /usr/share/MRS3/MRS-linux-x64；macOS '
+                                   '/Applications/MounRiver Studio 3.app）')
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     p = sub.add_parser('find', help='递归发现工程/solution')
     p.add_argument('dir')
-    p.add_argument('--depth', type=int, default=6)
+    p.add_argument('--depth', type=int, default=8,
+                   help='递归深度（默认 8，覆盖大型 EVT/例程树）')
     p.add_argument('--json', action='store_true')
     p.set_defaults(fn=cmd_find)
 
