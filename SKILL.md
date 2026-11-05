@@ -44,7 +44,8 @@ install-layout.md 与 flash-debug.md 标注。
 - 判定标志：IDE 为 `<根>/resources/app/resources/<平台层>/components/WCH/manifest.json`
   （macOS 在 `.app/Contents/Resources/...`）；纯工具链根为 `Toolchain/sub_manifest.json` +
   `OpenOCD/`。代次由 `.../app/product.json` 的 `mrsVersion` 判定（见 install-layout.md「代次判定」）。
-- 脚本：`python <skill目录>/scripts/mrs2.py <子命令> [--mrs2 <安装根>]`，Python 3.8+ 纯标准库。
+- 脚本：`python <skill目录>/scripts/mrs2.py [--mrs2 <安装根>] <子命令>`（`--mrs2` 是顶层参数，
+  必须在子命令之前），Python 3.8+ 纯标准库。
 - 完整目录结构、工具链解析、芯片库见 `references/install-layout.md`（定位工具前必读）。
 
 ## 快速决策表
@@ -52,17 +53,18 @@ install-layout.md 与 flash-debug.md 标注。
 | 任务 | 命令 |
 |---|---|
 | 找工程（EVT 树/任意目录递归，不需要安装目录） | `python scripts/mrs2.py find <目录>` |
-| 解析一个工程（配置/源文件/排除/下载信息 + 路径字符可构建性警告） | `python scripts/mrs2.py show <工程目录> [--mrs2 <安装根>]` |
-| 列出工具链（MRS2/MRS3 IDE 或纯工具链包的 GCC8/12/15/ARM） | `python scripts/mrs2.py toolchain [--mrs2 <安装根>]` |
-| 查芯片库（型号/地址/能力/chipID；**需 IDE 安装**，纯工具链包无 SDK） | `python scripts/mrs2.py chips [--series CH32V307] [--mrs2 <安装根>]` |
+| 解析一个工程（配置/源文件/排除/下载信息 + 路径字符可构建性警告） | `python scripts/mrs2.py [--mrs2 <安装根>] show <工程目录>` |
+| 列出工具链（MRS2/MRS3 IDE 或纯工具链包的 GCC8/12/15/ARM） | `python scripts/mrs2.py [--mrs2 <安装根>] toolchain` |
+| 查芯片库（型号/地址/能力/chipID；**需 IDE 安装**，纯工具链包无 SDK） | `python scripts/mrs2.py [--mrs2 <安装根>] chips [--series CH32V307]` |
 | 解析 solution（不需要安装目录） | `python scripts/mrs2.py sln <文件.wvsln>` |
 | **编译一个工程** | 读 `references/build.md`：优先复用 obj/ 已生成的 makefile 调 make；否则按配方组装 gcc 命令 |
 | **烧录 / 调试 / 读保护** | 读 `references/flash-debug.md`：手写 OpenOCD cfg（WCH 双重地址语义是坑） |
 
-`--mrs2 <安装根>` = MounRiver IDE 安装根或纯工具链根（MRS2/MRS3 通用）；省略时按环境变量与
-**本机平台**惯例位置定位（Windows `C:\MounRiver\MounRiver_Studio2` / `MounRiver_Studio3`，
-Linux `/usr/share/MRS3/MRS-linux-x64`，macOS `/Applications/MounRiver Studio 3.app`），
-仍找不到才报错提示"请先安装/解包并提供路径"。
+`--mrs2 <安装根>` 是**顶层参数，必须写在子命令之前**（`mrs2.py --mrs2 <安装根> toolchain`，
+写在子命令之后会报 unrecognized arguments）= MounRiver IDE 安装根或纯工具链根
+（MRS2/MRS3 通用）；省略时按环境变量与**本机平台**惯例位置定位（Windows
+`C:\MounRiver\MounRiver_Studio2` / `MounRiver_Studio3`，Linux `/usr/share/MRS3/MRS-linux-x64`，
+macOS `/Applications/MounRiver Studio 3.app`），仍找不到才报错提示"请先安装/解包并提供路径"。
 加 `--json` 可让 `show`/`find`/`chips`/`toolchain`/`sln` 输出机器可读 JSON。
 
 ## 工程识别规则
@@ -73,7 +75,8 @@ Linux `/usr/share/MRS3/MRS-linux-x64`，macOS `/Applications/MounRiver Studio 3.
 - `.cproject`：构建配置（CDT XML），唯一的编译真相来源。
 - `.template`：下载配置（Java properties 格式文本）：下载地址、hex 路径、擦除/校验/复位开关、芯片信息。
 - `.launch`：调试配置（Eclipse XML）。
-- 模板工程规范样例（可直接对照学习）：`assets/sample-ch32v307/`。
+- 模板工程规范样例：完整 IDE 安装里 `SDK/default/RISC-V/<系列>/NoneOS/<型号>.zip` 解压即得
+  完整可编译工程（结构见 install-layout.md「芯片库」）。
 
 ## 深入阅读（按需加载）
 

@@ -110,9 +110,9 @@
 - **在 Windows 上解包 Linux/mac 包会丢符号链接**（tar/zip 权限），GCC 插件 `.so` 缺链接后
   工具链不可用；应在目标平台解包，或用保留符号链接的工具（WSL2 的 tar、7-Zip 需注意）。
 - **架构**：macOS MRS3 IDE 是 **arm64 专用**；V2.4 mac 工具链包是**混合架构**（GCC8 与 ARM =
-  x86_64，GCC12/15 = arm64）。Intel Mac 只能用 V2.4 纯工具链包的 GCC8/ARM（MRS3 IDE 跑不了）；
-  Apple Silicon 优先 MRS3 arm64 IDE。症状：`Bad CPU type in executable`（mac）、
-  `Exec format error`（Linux 拷错包）。
+  x86_64，GCC12/15 = arm64，**OpenOCD 也是 arm64**）。Intel Mac 只能用 V2.4 纯工具链包的
+  GCC8/ARM **编译**（MRS3 IDE 跑不了，OpenOCD 跑不了→烧不了）；Apple Silicon 优先 MRS3 arm64
+  IDE（链路完整）。症状：`Bad CPU type in executable`（mac）、`Exec format error`（Linux 拷错包）。
 - **可执行位**：从 zip/Windows 拷贝会丢 `+x`；gcc/make/openocd 报 `Permission denied` 时
   `chmod +x`。工具链清单里是裸名，POSIX 不要补 `.exe`。
 - **PATH 与大小写**：PATH 分隔符 `:`（Windows `;`）；Linux/mac 文件系统区分大小写，

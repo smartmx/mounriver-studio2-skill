@@ -864,7 +864,7 @@ def scan_chipdb(inst):
                         info['abis'] = {k: d.get(k) for k in ('architecture', 'integer_ABI', 'floating_point',
                                                               'compressed_extension', 'multiply_extension',
                                                               'atomic_extension', 'extra_compressed_extension')}
-                        info['toolchain_default'] = (d.get('component_toolchain') or '').split(':')[-1]
+                        info['toolchain_default'] = (d.get('component_toolchain') or '').strip().rsplit(':', 1)[-1].rstrip('}')
                     except Exception:
                         pass
                 if rtos == 'NoneOS':
@@ -1131,19 +1131,32 @@ def cmd_sln(args):
         if t.startswith('BuildOrder='):
             build_order = [x for x in t[len('BuildOrder='):].split(',') if x]
             continue
-        p = t if os.path.isabs(t) else os.path.normpath(os.path.join(sln_dir, t))
+        # 成员行 = <工程名>.wvproj 的**文件**路径（相对本文件目录，/ 或 \ 均可，也可绝对）。
+        # 先把 Windows 风格 \ 统一成平台分隔符再解析；存在性按文件判断，工程目录取其父目录。
+        rel = t.replace('\\', os.sep) if os.sep != '\\' else t
+        p = rel if os.path.isabs(rel) else os.path.normpath(os.path.join(sln_dir, rel))
         key = p.lower() if os.name == 'nt' else p
         if key in seen:
             continue
         seen.add(key)
-        entry = {'raw': t, 'resolved': p, 'exists': os.path.isdir(p)}
+        exists = os.path.isfile(p)
+        name = os.path.splitext(os.path.basename(p))[0] if exists else ''
+        pdir = os.path.dirname(p) if exists else ''
+        if not exists and os.path.isdir(p):
+            # 容忍目录形态的成员行：目录里恰有一个 .wvproj 时按该工程处理
+            wvs = [f for f in sorted(os.listdir(p)) if f.lower().endswith('.wvproj')]
+            if len(wvs) == 1:
+                exists = True
+                name = wvs[0][:-len('.wvproj')]
+                pdir = p
+        entry = {'raw': t, 'resolved': p, 'exists': exists}
+        if exists:
+            entry['dir'] = pdir
+            entry['name'] = name
         (members if entry['exists'] else dropped).append(entry)
     if build_order:
         def rank(m):
-            nm = os.path.basename(m['resolved'])
-            for wv in [f for f in os.listdir(m['resolved']) if f.lower().endswith('.wvproj')] if os.path.isdir(m['resolved']) else []:
-                nm = wv[:-len('.wvproj')]
-                break
+            nm = m.get('name') or os.path.basename(m['resolved'])
             return build_order.index(nm) if nm in build_order else len(build_order)
         members.sort(key=rank)
     out = {'file': sln_path, 'config_lines': config_lines, 'build_order': build_order,
@@ -1155,7 +1168,7 @@ def cmd_sln(args):
         print('config: %s' % c)
     print('BuildOrder: %s' % (', '.join(build_order) if build_order else '(缺省=文件行序)'))
     for m in members:
-        print('member: %s' % m['resolved'])
+        print('member: %s  (%s)' % (m['resolved'], m.get('name') or '?'))
     for d in dropped:
         print('MISSING: %s (来自 %s)' % (d['resolved'], d['raw']))
 

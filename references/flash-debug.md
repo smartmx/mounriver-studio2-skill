@@ -128,6 +128,10 @@ GUI 路径：`Others/SWDTool`（WCH-LinkUtility）——读保护开关、调试
   芯片库 `<系列>-flash.json` 的 `id`；能力开关（`support_readProtectOpts` /
   `support_eraseCodeFlash` / `support_memoryAssign` / `support_eraseAll` …）为 false 的操作
   在该芯片上不可用，UI 上应禁用。
+- **调用序列**（以 MRS 自家扩展的实现为权威，从其 bundle 实证）：`SetTargetChip → doUpdate →
+  目标操作`——`doUpdate` 是扩展 JS 层的设备初始化封装。手工 FFI/P-Invoke 走精简序列
+  （`SetTargetChip + 操作`）是 MRVC 先例；若某平台/某芯片上操作整体失败，先回 MRS 扩展
+  bundle（`extensions/mrs-team.mrs-vscode/out/extension.js`）对照 `doUpdate` 做了什么再补齐。
 - **Windows 命令行路径（MRVC 先例，实测）**：用与库**位数匹配**的 PowerShell P/Invoke
   （取 `Others\CommunicationLib\default\` 那份；OpenOCD bin 里另有一份 32 位拷贝、匹配 32 位
   openocd.exe，不要拿它当桥）：

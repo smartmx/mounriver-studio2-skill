@@ -174,7 +174,7 @@ Windows 工具链没有架构变体（都 x86），非 Windows 必须核对**已
 |---|---|
 | MRS3 Linux IDE（tar.xz 与 .deb） | 全 x86-64 ELF（启动器、gcc、openocd、make 同） |
 | MRS3 macOS IDE（arm64 包） | Mach-O **arm64 专用**（Electron、GCC12/15、openocd、make）；GCC8 与 ARM 是 x86_64（Rosetta 可跑） |
-| MRS2 代 macOS 纯工具链 V2.4 | **混合架构**：GCC8（`riscv-none-embed-*`）与 `arm-none-eabi-*` = **x86_64**；GCC12（`riscv-wch-elf-*`）与 GCC15（`riscv32-wch-elf-*`）= **arm64** |
+| MRS2 代 macOS 纯工具链 V2.4 | **混合架构**：GCC8（`riscv-none-embed-*`，含其 gdb）与 `arm-none-eabi-*` = **x86_64**；GCC12（`riscv-wch-elf-*`，含其 gdb）、GCC15（`riscv32-wch-elf-*`）与 **OpenOCD = arm64**；全部单架构 Mach-O，无 universal |
 | MRS2 代 Linux 纯工具链 V2.4 | 全 x86-64 ELF |
 
 - 判定读 ELF `e_machine`（0x3E=x86-64 / 0xB7=AArch64）或 Mach-O `cputype`
@@ -184,8 +184,10 @@ Windows 工具链没有架构变体（都 x86），非 Windows 必须核对**已
   **Apple Silicon 用 V2.4 包的 GCC8 判架构**（GCC8 是 x86_64，会整包被拒；但同一包的
   GCC12/15 是 arm64，手工指定这两个工具链仍可用）。
 - Intel Mac 用 V2.4 mac 包：GCC8/ARM 可跑，**GCC12/15 是 arm64，必然 `Bad CPU type`**；
-  Apple Silicon 用 V2.4 mac 包：GCC12/15 可跑，GCC8/ARM 需 Rosetta（且按 GCC8 做门禁的工具
-  会先拒绝整包）。所以 **Intel Mac 只有纯工具链形态可用**，Apple Silicon 优先 MRS3 arm64 IDE。
+  且包里的 **OpenOCD 也是 arm64**——Intel Mac **只能编译，烧录/调试不可用**。
+  Apple Silicon 用 V2.4 mac 包：GCC12/15 与 OpenOCD 可跑，GCC8/ARM 需 Rosetta（且按 GCC8 做
+  门禁的工具会先拒绝整包）。所以 **Intel Mac 只有纯工具链形态、且只覆盖编译**，Apple Silicon
+  优先 MRS3 arm64 IDE（链路完整）。
 - Linux 上若把 Windows/Mac 树拷过来，二进制架构不符同样在构建时失败（`Exec format error`）。
 
 ## sub_manifest.json（工具链清单）
