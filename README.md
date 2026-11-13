@@ -41,6 +41,7 @@ git clone https://github.com/smartmx/mounriver-studio2-skill.git ~/.claude/skill
   - **macOS**：已安装 MRS3（`/Applications/MounRiver Studio 3.app`，arm64 专用），或解包 MRS2 代纯工具链包（包内 GCC8/ARM 为 x86_64、GCC12/15 为 arm64）。
 - **安装路径来源按优先级**：`--mrs2 <安装根/工具链根>` 参数（MRS2/MRS3、IDE/纯工具链通用，自动识别代次与布局）→ `MRS2_HOME` / `MRS3_HOME` 环境变量 → 本机平台惯例位置（Windows `C:\MounRiver\MounRiver_Studio2` / `MounRiver_Studio3`；Linux `/usr/share/MRS3/MRS-linux-x64`；macOS `/Applications/MounRiver Studio 3.app`）。纯工具链包没有惯例位置，必须显式提供。都不存在时会提示"请先安装 MRS2/MRS3 或解包工具链包，并提供安装路径"
 - **Python 3.8+**（纯标准库，无第三方依赖）
+- **版本依据**：本 skill 结论实证于 MRS2 `2.0.0`（含 V240/2.4.0 纯工具链包）与 MRS3 `3.0.0`（三平台包）；其余/未来版本的结构与行为未验证——先按所属大版本（MRS2/MRS3）已知结构尝试，不通再按 SKILL.md 的判定标志实际探测所需组件
 
 ## 快速上手
 

@@ -101,13 +101,14 @@ class Mrs2Install:
     """
 
     def __init__(self, root, res, flavor='unknown', label='MounRiver Studio',
-                 layer='', kind='ide', app_dir=None):
+                 layer='', kind='ide', app_dir=None, mrs_version=''):
         self.root = root                       # IDE 安装根 / 纯工具链根
         self.res = res                         # 平台资源层目录（IDE）或工具链根
         self.layer = layer                     # win32 / linux / darwin；纯工具链为空
         self.kind = kind                       # ide / toolchain
         self.flavor = flavor                   # mrs2 / mrs3 / unknown
         self.label = label                     # 品牌全名（product.json 的 nameShort）
+        self.mrs_version = mrs_version         # product.json 的 mrsVersion 全串（如 3.0.0）
         self.app_dir = app_dir or os.path.join(root, 'resources', 'app')
         if kind == 'toolchain':
             self.toolchain_dir = os.path.join(root, 'Toolchain')
@@ -136,8 +137,10 @@ def detect_flavor(root, app_dir=None):
     """代次判定。MRS2/MRS3 目录同构，唯一区分点是品牌文件：product.json 的 mrsVersion
     主号（2/3）权威；nameShort/applicationName 品牌串与安装根启动器名兜底
     （逻辑与 MRVC toolchain.ts detectFlavor 一致）。macOS 的启动器是 Electron 存根，
-    不携带代次，只能靠 product.json。"""
+    不携带代次，只能靠 product.json。返回 (flavor, label, mrs_version)——mrs_version 是
+    product.json 的 mrsVersion 全串（如 '3.0.0'；无 brand 文件时为空）。"""
     label = ''
+    version = ''
     candidates = []
     if app_dir:
         candidates.append(os.path.join(app_dir, 'product.json'))
@@ -151,14 +154,15 @@ def detect_flavor(root, app_dir=None):
         try:
             j = json.loads(read_text(pj))
             label = (j.get('nameShort') or '').strip()
-            major = (j.get('mrsVersion') or '').strip().split('.', 1)[0]
+            version = (j.get('mrsVersion') or '').strip()
+            major = version.split('.', 1)[0]
             if major in ('2', '3'):
-                return 'mrs' + major, label or 'MounRiver Studio ' + major
+                return 'mrs' + major, label or 'MounRiver Studio ' + major, version
             branding = ((j.get('nameShort') or '') + ' ' + (j.get('applicationName') or '')).lower()
             if re.search(r'studio\s*3|studio-3', branding):
-                return 'mrs3', label or 'MounRiver Studio 3'
+                return 'mrs3', label or 'MounRiver Studio 3', version
             if re.search(r'studio\s*2|studio-2', branding):
-                return 'mrs2', label or 'MounRiver Studio 2'
+                return 'mrs2', label or 'MounRiver Studio 2', version
         except Exception:
             pass                               # 坏 product.json → 走启动器兜底
     try:
@@ -166,10 +170,10 @@ def detect_flavor(root, app_dir=None):
     except OSError:
         names = set()
     if 'mounriver studio 3.exe' in names or 'mounriver-studio 3' in names:
-        return 'mrs3', label or 'MounRiver Studio 3'
+        return 'mrs3', label or 'MounRiver Studio 3', version
     if 'mounriver studio 2.exe' in names or 'mounriver-studio 2' in names:
-        return 'mrs2', label or 'MounRiver Studio 2'
-    return 'unknown', label or 'MounRiver Studio'
+        return 'mrs2', label or 'MounRiver Studio 2', version
+    return 'unknown', label or 'MounRiver Studio', version
 
 
 def locate_layout(path):
@@ -228,8 +232,9 @@ def find_install(explicit=None):
         if kind == 'toolchain':
             return Mrs2Install(root, res, 'mrs2', 'MRS Toolchain (standalone)',
                                layer='', kind='toolchain')
-        flavor, label = detect_flavor(root, app_dir=app_dir)
-        return Mrs2Install(root, res, flavor, label, layer=layer, kind='ide', app_dir=app_dir)
+        flavor, label, version = detect_flavor(root, app_dir=app_dir)
+        return Mrs2Install(root, res, flavor, label, layer=layer, kind='ide',
+                           app_dir=app_dir, mrs_version=version)
     raise SystemExit(
         '[mrs2] 未找到有效的 MounRiver Studio 安装或工具链包：请先确认已安装 MRS2/MRS3，'
         '或解包 MRS_Toolchain_*；然后用 --mrs2 <安装根/工具链根> 指定'
@@ -237,7 +242,9 @@ def find_install(explicit=None):
         '       已检查: %s\n'
         '       IDE 判定标志: <根>/resources/app/resources/<win32|linux|darwin>/'
         'components/WCH/manifest.json（macOS 在 .app/Contents/Resources/...）。\n'
-        '       纯工具链判定标志: <根>/Toolchain/sub_manifest.json + <根>/OpenOCD/。'
+        '       纯工具链判定标志: <根>/Toolchain/sub_manifest.json + <根>/OpenOCD/。\n'
+        '       非 2.0.0/3.0.0 的其他版本：可先按所属大版本（MRS2/MRS3）的已知目录结构尝试，'
+        '结构对不上时再用上面的判定标志实际探测所需组件。'
         % '；'.join(cands))
 
 
@@ -1083,10 +1090,12 @@ def cmd_toolchain(args):
         print(json.dumps({'install': inst.root, 'root': inst.root, 'res': inst.res,
                           'layer': inst.layer, 'kind': inst.kind,
                           'flavor': inst.flavor, 'label': inst.label,
+                          'mrsVersion': inst.mrs_version,
                           'toolchains': tcs}, ensure_ascii=False, indent=2))
         return
     kind = '，纯工具链包' if inst.kind == 'toolchain' else ''
-    print('安装: %s  [%s%s]' % (inst.root, inst.label, kind))
+    ver = ' mrsVersion=%s' % inst.mrs_version if inst.mrs_version else ''
+    print('安装: %s  [%s%s%s]' % (inst.root, inst.label, kind, ver))
     for t in tcs:
         ok = _tool_exists(os.path.join(t['dir'], 'bin', t['gcc']))
         print('  %-6s %-8s %-22s %s  [%s]' % (t['name'], t['type'], t['prefix'], t['dir'],

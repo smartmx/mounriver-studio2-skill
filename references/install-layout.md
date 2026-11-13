@@ -7,6 +7,13 @@
 只有品牌/版本判定、POSIX 组件缺席与个别组件位数（见「平台形态」「代次判定」与树内标注）。
 `<安装根>` 指定位到的 MounRiver Studio 2/3 安装目录或纯工具链根（来源见下方「安装路径的来源」）。
 
+> **实证版本**：本篇结论核对于 **MRS2 `2.0.0`**（Windows 安装的 `product.json mrsVersion`；
+> 另核对 `V240`/2.4.0 纯工具链包）与 **MRS3 `3.0.0`**（Windows 安装 + Linux tar.xz/.deb +
+> macOS V300 包；两代 VSCode 内核同为 1.80.2）。**其余版本未验证，未来版本的目录结构未知**
+> ——降级顺序：①先按所属**大版本**（MRS2/MRS3）的已知结构尝试本篇路径；②对不上时退回
+> **实际探测**：重读 `product.json` / 平台层 manifest 定位安装，再按需实测所需组件
+> （`sub_manifest.json`、OpenOCD `bin/`、`SDK/default`、make、芯片库 JSON）后继续。
+
 ## 平台形态（先看这张表）
 
 | 平台 | MRS2（V2.x） | MRS3（V3.x） |
@@ -65,8 +72,11 @@
     │       ├── WCHTouchKeyTool\default\WCHTouchKeyTool.exe
     │       ├── WCHGUIDesigner\default\WCHGUIDesigner.exe
     │       ├── [MRS3 额外] WCHToolKit\default\WCHToolKit.exe  ← "WCH 工具集"（Electron，工具统一入口）
-    │       ├── [MRS3 额外] WCHAgent\default\opencode.exe      ← "WCH Agent"（内置助手组件；MRS2 两者皆无）
-    │       └── Firmware_Link\  WCHLinkEJtagUpdTool\
+    │       ├── [MRS3 额外] WCHAgent\default\opencode.exe      ← "WCH Agent"（内置 AI 助手的 OpenCode 运行时，见下节）
+    │       │                                  另有 opencode\{AGENTS.md, opencode.json, mcp.json, skills\}
+    │       └── Firmware_Link\default\        ← WCH-Link 固件 payload：FIRMWARE_<chip>.bin
+    │                                          + wchlink.wcfg（期望版本表）；WCHLinkEJtagUpdTool.exe
+    │                                          = LinkE→JTAG SPI 的 GUI 转换器（非 CLI）
     └── others\
         ├── Build_Tools\Make\bin\make.exe   ← 还有 sh.exe rm.exe mkdir.exe echo.exe busybox.exe
         ├── COMTransmit\COMTransmit.exe     ← 串口调试
@@ -139,6 +149,10 @@
    - macOS：`Contents/MacOS/Electron`（`CFBundleExecutable=Electron`），**名字不带代次**，
      只能靠 product.json——macOS 上启动器探测返回 null，不要据此判代。
 4. 全无 → 记为 unknown（手工拼装的安装）；`manifest.json` 两代通用，不能用来区分代次。
+
+**启动器参数**：`-m <绝对路径 .wvproj>` 直接打开该工程（MRS 自家 Linux 包装脚本同款参数）；
+**必须绝对路径**——相对路径 MRS 直接报 "not absolute"。带空格的路径注意各 shell 的引号
+层级（Windows 建议内嵌双引号传参）。
 
 ## 安装路径的来源（按优先级）
 
@@ -256,7 +270,15 @@ SDK，其 `<系列>-flash.json` / `<系列>-targetProcessor.json` 结构与 Wind
 ```
 
 - 芯片型号清单 = `<系列>\<RTOS>\NoneOS\*.zip` 的文件名（NoneOS 的 zip 对应具体封装型号，
-  如 `CH32V307VCT.zip`；其他 RTOS 目录只有一个全家桶 zip，不算型号）。
+  如 `CH32V307VCT.zip`；其他 RTOS 目录只有一个全家桶 zip，不算型号）。模板 MCU 名可能比
+  zip 名多一个封装尾字符（`CH32V203CCT6` ↔ `CH32V203CCT.zip`），匹配时容错处理。
+- **`special` 单型号覆盖**：个别 `<系列>-flash.json` 带 `special` 键（当前 SDK 仅
+  CH32V203：`"special": {"mcu": "CH32V203CCT", "corresponding": {…CH32V205 的 control,
+  "id": 206…}}`）——该型号的下载控制（含 chipId/能力开关）要用 corresponding 覆盖值，
+  不能直接用系列默认 `id`。
+- **家族 id 跨系列共享**：id 只能判家族不能判具体型号（如 **78 = CH32M007 与
+  CH32V002/4/5/6/7**；6 = CH32V30x）——做"当前芯片 vs 工程目标"比对时，不匹配提示要列出
+  该 id 的全部候选型号。
 - 挑选 RTOS 目录 = 新建工程向导的第二级（NoneOS / FreeRTOS / RT-Thread / TencentOS / Harmony LiteOS-M / uCOS-II…）。
 - 模板 zip 解压即得完整工程（含 .project/.cproject/.launch/.template），新建工程 = 解压 +
   写空 `<新名>.wvproj` + 把模板显示名改成新名（改名级联见 project-formats.md）。
@@ -274,6 +296,64 @@ WCH 工具的统一入口）——MRS2 没有该组件，菜单里也不出现�
 WCHTouchKeyTool、WCHGUIDesigner、WCHToolKit、HexBinStudio、COMTransmit 全部缺席；调用方按
 组件存在性降级为"该平台不提供"，不要拼一个不存在的 `.exe` 路径。
 涉及读保护开关、调试器模式切换、固件升级等深度操作时优先让用户用 WCH-LinkUtility（Windows）。
+
+## WCHAgent：MRS3 的 AI/MCP 子系统（MRS3 独有，MRS2 无）
+
+> 本节结论取自 **MRS3 `3.0.0`**（Windows 安装 + Linux/macOS V300 解包树，三平台逐项核对）。
+> AI 子系统的结构（组件布局、mcp.json、捆绑技能集）**在后续版本完全可能变化**，按 3.0.0 结论
+> 直接套用时先重验。
+
+MRS3 内置 AI 助手 = IDE 侧 webview（`mrs-team.mrs-vscode` 扩展的 mrs-assistant）+
+**OpenCode 运行时**（WCHAgent 组件）+ 两个 MCP 服务器。组件布局（三平台同构，二进制名随平台）：
+
+```
+components/WCH/Others/WCHAgent/default/
+├── opencode.exe (Windows, ~139MB) / opencode_linux (~144MB) / opencode_mac (~104MB)
+├── opencode/                        ← 配置与技能（三平台都带）
+│   ├── AGENTS.md                    ← 代理行为规则（工程创建规则、模板代码流程）
+│   ├── opencode.json                ← 模型网关配置
+│   ├── mcp.json                     ← 预置 MCP 注册表
+│   └── skills/                      ← 捆绑技能（Windows 8 个；Linux/mac 6 个）
+└── mrs-agent-todowrite-instructions.md
+```
+
+- **opencode.json**：OpenAI 兼容 provider `default`（`@ai-sdk/openai-compatible`），baseURL 指向
+  WCH 内网网关（随包默认 `http://192.168.111.15/v1`），API key 走环境变量 `MRS_AGENT_API_KEY`
+  （`{env:...}` 引用，含 Authorization 头）；模型 `default/deepseek-flash`（512K 上下文 / 128K
+  输出），auto compaction 开启。**网关不可达（离线/非 WCH 网）时助手不可用**——这与本技能
+  无关，本技能不依赖该服务。
+- **MCP ① `mrs-ide-tools`**：`mrs-team.mrs-vscode` 扩展**进程内**自实现的 MCP JSON-RPC 服务器
+  （协议版本 `2024-11-05`，serverInfo `mrs-ide-tools` v1.0.0），动态端口；扩展按工作区把条目
+  自动写进 OpenCode 的 `mcp.json`（并清理陈旧条目）。数十个 `ide-*` 工具覆盖：工程上下文
+  （chipType/projectToOperate）、新建/转换（含 `ide-convert-keil-project`）、编译（build/
+  rebuild/build-all）、烧录（download、断电/复位烧录、链路状态）、调试（断点/单步/寄存器/
+  变量/调用栈/内存分配读写，约 18 个）、配置（include 目录、外部库、linker scripts、
+  download property）、外部工具桥、clang-tidy 问题查询。**`ide-edit` 是代理改文件的唯一
+  通道**——返回 taskId，需轮询取结果。
+- **MCP ② `mrs-ai-meter`**：remote 型，随包 `mcp.json` 预置 `http://127.0.0.1:3182/mcp`
+  （enabled、OAuth false、Authorization 头留空由运行时注入）。**服务器本体不在安装包内**
+  （全树排查无 3182 的实现），由 AI 服务在运行时拉起——本机连不上它是常态。工具：
+  `chip_code_tree` / `chip_code_read` / `chip_code_download`（模板代码库；**红线：只落当前
+  工程内，本地已存在的文件不直接覆盖**——先 read 取参考再 `ide-edit` 修改）+
+  `chip_knowledge_search`（仅编码前检索知识库，编码期间禁用）。
+- **捆绑技能**（`opencode/skills/`）：Windows 8 个，Linux/mac 6 个——`mrs-external-tools`
+  （外部调试工具查询/安装/调用，**Windows 限定**，靠 `mrs_pipe_host.ps1` 常驻命名管道宿主）
+  与 `mrs-prepare-verify`（验证方案 + 硬件连接表门禁）仅 Windows 携带；其余两平台共用：
+  `mrs-code-check-fix`、`mrs-debug-check`（含 `mcu_isa.json`）、`mrs-validate-linkld`、
+  `mrs-validate-march`，以及两个**迁移技能**——`mrs-ch32v003-to-ch32v002-005`（9 个 references
+  迁移文档 + 符号扫描脚本）与 `mrs-stm32f1-to-ch32v20x-spl`——是现成的寄存器/API 差异参考
+  资料，值得直接翻阅。
+- **AGENTS.md 的工程规则**：新建工程默认位置 `<OS 用户目录>/mounriver-studio-projects`；
+  `projectPath` **禁止包含 `projectName`**（工具自动创建 `projectPath/projectName`）。
+- **任务卡机制**：界面任务卡完全由 `todowrite` 工具驱动——逐项即时更新、禁止一次批量标
+  完成（WCHAgent 自带的 `mrs-agent-todowrite-instructions.md` 明文规定，优先级高于省工具
+  调用的偏好）。
+- **边界**：这套子系统只在 MRS3 IDE 宿主内工作（动态端口、按工作区注册、WCH 内网网关）。
+  外部 AI 会话（即用本技能的场景）**不要**试图直连 `127.0.0.1:3182` 或复刻 `ide-*` 工具——
+  本技能走的是"直接操作工程文件 + 本机工具链"的平行路线，两者互不依赖。
+- **WCHToolKit 不是 AI/MCP 组件**：独立 Electron 工具集（见上节），包内无任何 MCP 配置或
+  服务痕迹。MRS3 共内置 103 个扩展，AI 相关的只有 `mrs-team.mrs-vscode`（IDE 主扩展 +
+  mrs-assistant webview）与 welcome 页用的 `mrs-team.mrs-before-startup`。
 
 ## PATH 组装（构建/烧录时）
 

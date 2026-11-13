@@ -46,6 +46,15 @@ install-layout.md 与 flash-debug.md 标注。
   `OpenOCD/`。代次由 `.../app/product.json` 的 `mrsVersion` 判定（见 install-layout.md「代次判定」）。
 - 脚本：`python <skill目录>/scripts/mrs2.py [--mrs2 <安装根>] <子命令>`（`--mrs2` 是顶层参数，
   必须在子命令之前），Python 3.8+ 纯标准库。
+- **版本依据**：本 skill 的结构性结论实证于 **MRS2 `2.0.0`**（Windows 安装，product.json
+  `mrsVersion`；另核对 `V240`/2.4.0 纯工具链包）与 **MRS3 `3.0.0`**（Windows 安装 + Linux
+  tar.xz/.deb + macOS V300 包）。其余历史版本未验证；**未来版本的目录结构、组件与行为均未知**
+  ——遇到新版本先按上面的判定标志重核（product.json / 平台层 manifest / 启动器名），不要假定
+  结论继续成立；各篇 references 开头也标了各自的实证版本。
+  **非实证版本的降级顺序**：①先按所属**大版本**（MRS2 或 MRS3）的已知结构尝试（平台层路径、
+  工具链前缀、sub_manifest 等）；②结构对不上时，退回**实际探测**所需工具——用判定标志定位
+  安装，再按需实测组件（`Toolchain/sub_manifest.json`、OpenOCD `bin/`、`SDK/default`、
+  make bundle、芯片库 JSON 是否在位），以探测结果为准继续工作，不要因为版本不认识就放弃。
 - 完整目录结构、工具链解析、芯片库见 `references/install-layout.md`（定位工具前必读）。
 
 ## 快速决策表
